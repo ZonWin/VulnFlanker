@@ -58,6 +58,7 @@ const defaultFilters: TaskCenterItemsQuery = {
 };
 
 const itemTypeOptions: Array<{ label: string; value: TaskCenterItemType }> = [
+  { label: t("风险匹配评估"), value: "match_evaluation" },
   { label: t("验证任务"), value: "verification" },
   { label: t("情报采集"), value: "intel_collection" },
   { label: t("风险待处理项"), value: "risk_queue_item" },
@@ -74,6 +75,7 @@ const statusGroupOptions: Array<{ label: string; value: TaskCenterStatusGroup }>
 ];
 
 const sourceOptions = [
+  { label: t("风险匹配"), value: "matching" },
   { label: t("验证任务"), value: "verification" },
   { label: t("风险队列"), value: "risk-queue" },
   { label: t("AI 补全"), value: "ai-enrichment" },
@@ -109,6 +111,7 @@ function normalizeFilters(values: TaskCenterItemsQuery): TaskCenterItemsQuery {
 
 function itemTypeLabel(value: TaskCenterItemType) {
   const labels: Record<TaskCenterItemType, string> = {
+    match_evaluation: t("风险匹配评估"),
     verification: t("验证任务"),
     intel_collection: t("情报采集"),
     risk_queue_item: t("风险项"),
@@ -166,6 +169,10 @@ function taskTitle(item: TaskCenterItem) {
     if (title.startsWith("验证 ")) {
       return `${t("验证")} ${title.slice("验证 ".length)}`;
     }
+  }
+
+  if (item.item_type === "match_evaluation") {
+    return title === "全量风险匹配评估" ? t("全量风险匹配评估") : t("定向风险匹配评估");
   }
 
   if (item.item_type === "intel_collection" && title.endsWith(" 情报采集")) {
@@ -400,6 +407,13 @@ export default function TaskCenterPage() {
       key: "metrics",
       width: 170,
       render: (_, record) => {
+        if (record.item_type === "match_evaluation") {
+          return t("{{v0}} / {{v1}} 已处理，{{v2}} 失败", {
+            v0: metricValue(record, "processed_count"),
+            v1: metricValue(record, "total_count"),
+            v2: metricValue(record, "failed_count")
+          });
+        }
         if (record.item_type === "verification") {
           return t("{{v0}} 证据 / {{v1}} 重试", { v0: metricValue(record, "evidence_count"), v1: metricValue(
             record,

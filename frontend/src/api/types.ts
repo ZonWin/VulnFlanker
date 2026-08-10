@@ -1020,9 +1020,22 @@ export interface MatchEvaluationRequest {
 }
 
 export interface MatchEvaluationResponse {
+  run_id: string;
+  task_id: string | null;
   status: string;
+  asset_id: string | null;
+  vulnerability_id: string | null;
+  total_count: number;
+  processed_count: number;
   evaluated_count: number;
-  result_ids: string[];
+  skipped_count: number;
+  failed_count: number;
+  sample_result_ids: string[];
+  recent_error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MatchResultHandlingUpdate {
@@ -1319,7 +1332,8 @@ export type TaskCenterItemType =
   | "verification"
   | "intel_collection"
   | "risk_queue_item"
-  | "ai_enrichment";
+  | "ai_enrichment"
+  | "match_evaluation";
 
 export type TaskCenterStatusGroup =
   | "pending"

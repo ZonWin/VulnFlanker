@@ -42,7 +42,7 @@ def test_matching_confidence_can_be_configured(client, db_session) -> None:
         json={"vulnerability_id": vulnerability.canonical_id},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     match_result = db_session.scalar(select(MatchResult))
     assert match_result is not None
     assert match_result.status == "not_affected"
@@ -81,7 +81,7 @@ def test_risk_weights_can_be_configured(client, db_session) -> None:
         json={"vulnerability_id": vulnerability.canonical_id},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     match_result = db_session.scalar(select(MatchResult))
     assert match_result is not None
     assert match_result.status == "affected"

@@ -15,9 +15,22 @@ class MatchEvaluationRequest(BaseModel):
 
 
 class MatchEvaluationResponse(BaseModel):
+    run_id: str
+    task_id: str | None = None
     status: str
+    asset_id: str | None = None
+    vulnerability_id: str | None = None
+    total_count: int = 0
+    processed_count: int = 0
     evaluated_count: int
-    result_ids: list[str] = Field(default_factory=list)
+    skipped_count: int = 0
+    failed_count: int = 0
+    sample_result_ids: list[str] = Field(default_factory=list)
+    recent_error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class MatchEvidenceOut(BaseModel):

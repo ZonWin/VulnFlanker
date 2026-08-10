@@ -83,21 +83,7 @@ services:
       dockerfile: deploy/backend.Dockerfile
     container_name: vulnflanker-console-api
     working_dir: /workspace
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "app.main_console:app",
-        "--reload",
-        "--reload-dir",
-        "/workspace/backend",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-        "--no-proxy-headers",
-      ]
+    command: ["python", "-m", "app.server", "console"]
     env_file:
       - ../.env
     environment:
@@ -136,20 +122,7 @@ services:
       dockerfile: deploy/backend.Dockerfile
     container_name: vulnflanker-agent-ingress
     working_dir: /workspace
-    command:
-      [
-        "python",
-        "-m",
-        "uvicorn",
-        "app.main_agent:app",
-        "--reload",
-        "--reload-dir",
-        "/workspace/backend",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8001",
-      ]
+    command: ["python", "-m", "app.server", "agent"]
     env_file:
       - ../.env
     environment:

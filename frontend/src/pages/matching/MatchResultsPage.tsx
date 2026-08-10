@@ -8,6 +8,7 @@ import {
   message,
   Modal,
   Pagination,
+  Progress,
   Select,
   Space,
   Switch,
@@ -16,11 +17,13 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, Eye, PlayCircle, RefreshCw, RotateCcw, Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import {
   evaluateMatchResults,
+  getMatchEvaluationRun,
+  getMatchEvaluationRuns,
   getMatchResults,
   reevaluateMatchResult
 } from "@/api/matchResults";
@@ -80,6 +83,12 @@ function normalizeEvaluation(values: EvaluateFormValues) {
   };
 }
 
+const activeEvaluationStatuses = new Set(["queued", "running"]);
+
+function isEvaluationActive(result?: MatchEvaluationResponse | null) {
+  return Boolean(result && activeEvaluationStatuses.has(result.status));
+}
+
 export default function MatchResultsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -102,6 +111,8 @@ export default function MatchResultsPage() {
   const [filters, setFilters] = useState<MatchResultsQuery>(initialFilters);
   const [evaluationResult, setEvaluationResult] =
     useState<MatchEvaluationResponse | null>(null);
+  const [evaluationRunId, setEvaluationRunId] = useState<string | null>(null);
+  const notifiedRunId = useRef<string | null>(null);
   const [autoSettingsOpen, setAutoSettingsOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -119,10 +130,53 @@ export default function MatchResultsPage() {
     queryKey: platformSettingsQueryKey,
     queryFn: getPlatformSettings
   });
+  const latestEvaluationQuery = useQuery({
+    queryKey: ["match-evaluations", "latest"],
+    queryFn: () => getMatchEvaluationRuns(1)
+  });
+  const evaluationRunQuery = useQuery({
+    queryKey: ["match-evaluations", evaluationRunId],
+    queryFn: () => getMatchEvaluationRun(evaluationRunId as string),
+    enabled: Boolean(evaluationRunId),
+    refetchInterval: (query) =>
+      isEvaluationActive(query.state.data) ? 1000 : false
+  });
 
   useEffect(() => {
     setCurrentPage(1);
   }, [filters]);
+
+  useEffect(() => {
+    if (evaluationRunId || !latestEvaluationQuery.data?.length) {
+      return;
+    }
+    const latestRun = latestEvaluationQuery.data[0];
+    if (isEvaluationActive(latestRun)) {
+      setEvaluationResult(latestRun);
+      setEvaluationRunId(latestRun.run_id);
+    }
+  }, [evaluationRunId, latestEvaluationQuery.data]);
+
+  useEffect(() => {
+    const result = evaluationRunQuery.data;
+    if (!result) {
+      return;
+    }
+    setEvaluationResult(result);
+    if (isEvaluationActive(result) || notifiedRunId.current === result.run_id) {
+      return;
+    }
+    notifiedRunId.current = result.run_id;
+    void queryClient.invalidateQueries({ queryKey: ["match-results"] });
+    void queryClient.invalidateQueries({ queryKey: ["task-center"] });
+    if (result.status === "completed") {
+      messageApi.success(
+        t("匹配评估完成，共评估 {{v0}} 条", { v0: result.evaluated_count })
+      );
+    } else {
+      messageApi.error(result.recent_error || t("匹配评估完成，但存在失败项"));
+    }
+  }, [evaluationRunQuery.data, messageApi, queryClient]);
 
   const matchResultsPage = matchResultsQuery.data;
   const rows = matchResultsPage?.items ?? [];
@@ -133,8 +187,10 @@ export default function MatchResultsPage() {
       evaluateMatchResults(normalizeEvaluation(values)),
     onSuccess: (result) => {
       setEvaluationResult(result);
-      messageApi.success(t("匹配评估完成，生成 {{v0}} 条结果", { v0: result.evaluated_count }));
-      void queryClient.invalidateQueries({ queryKey: ["match-results"] });
+      setEvaluationRunId(result.run_id);
+      notifiedRunId.current = null;
+      messageApi.info(t("匹配评估已进入后台队列，可继续使用其他页面"));
+      void queryClient.invalidateQueries({ queryKey: ["task-center"] });
     },
     onError: (error) => {
       messageApi.error(error instanceof Error ? error.message : t("匹配评估失败"));
@@ -193,6 +249,16 @@ export default function MatchResultsPage() {
 
     evaluateMutation.mutate(values);
   }
+
+  const evaluationActive = isEvaluationActive(evaluationResult);
+  const evaluationProgress = evaluationResult?.total_count
+    ? Math.min(
+        100,
+        Math.round(
+          (evaluationResult.processed_count / evaluationResult.total_count) * 100
+        )
+      )
+    : 0;
 
   const columns: ColumnsType<MatchResultSummary> = [
     {
@@ -349,9 +415,12 @@ export default function MatchResultsPage() {
               <Button
                 onClick={() => {
                   evaluateForm.resetFields();
-                  setEvaluationResult(null);
+                  if (!evaluationActive) {
+                    setEvaluationResult(null);
+                    setEvaluationRunId(null);
+                  }
                 }}
-                disabled={evaluateMutation.isPending}
+                disabled={evaluateMutation.isPending || evaluationActive}
               >
                 {t("重置")}</Button>
               <Button
@@ -359,6 +428,7 @@ export default function MatchResultsPage() {
                 htmlType="submit"
                 icon={<PlayCircle size={16} />}
                 loading={evaluateMutation.isPending}
+                disabled={evaluationActive}
               >
                 {t("触发评估")}</Button>
             </Space>
@@ -368,17 +438,41 @@ export default function MatchResultsPage() {
         {evaluationResult ? (
           <Alert
             className="task-alert"
-            type={evaluationResult.status === "completed" ? "success" : "info"}
+            type={
+              evaluationResult.status === "completed"
+                ? "success"
+                : evaluationResult.status === "failed" ||
+                    evaluationResult.status === "completed_with_errors"
+                  ? "error"
+                  : "info"
+            }
             showIcon
             title={t("评估状态：{{v0}}", { v0: evaluationResult.status })}
             description={
               <Space orientation="vertical" size={4}>
+                <Progress
+                  percent={evaluationProgress}
+                  size="small"
+                  status={evaluationResult.status === "failed" ? "exception" : undefined}
+                />
                 <Typography.Text>
-                  {t("评估结果数：")}{evaluationResult.evaluated_count}
+                  {t("已处理 {{v0}} / {{v1}}，已评估 {{v2}}，跳过 {{v3}}，失败 {{v4}}", {
+                    v0: evaluationResult.processed_count,
+                    v1: evaluationResult.total_count,
+                    v2: evaluationResult.evaluated_count,
+                    v3: evaluationResult.skipped_count,
+                    v4: evaluationResult.failed_count
+                  })}
                 </Typography.Text>
-                {evaluationResult.result_ids.length ? (
+                {evaluationResult.recent_error ? (
+                  <Typography.Text type="danger">
+                    {evaluationResult.recent_error}
+                  </Typography.Text>
+                ) : null}
+                {evaluationResult.sample_result_ids.length ? (
                   <Space size={[8, 4]} wrap>
-                    {evaluationResult.result_ids.slice(0, 8).map((id) => (
+                    <Typography.Text type="secondary">{t("结果样例：")}</Typography.Text>
+                    {evaluationResult.sample_result_ids.map((id) => (
                       <Typography.Link
                         key={id}
                         onClick={() => navigate(`/matching/${id}`)}
@@ -386,11 +480,6 @@ export default function MatchResultsPage() {
                         {id.slice(0, 8)}
                       </Typography.Link>
                     ))}
-                    {evaluationResult.result_ids.length > 8 ? (
-                      <Typography.Text type="secondary">
-                        +{evaluationResult.result_ids.length - 8}
-                      </Typography.Text>
-                    ) : null}
                   </Space>
                 ) : null}
               </Space>
@@ -452,6 +541,7 @@ export default function MatchResultsPage() {
                   icon={<PlayCircle size={16} />}
                   onClick={() => submitEvaluation(evaluateForm.getFieldsValue())}
                   loading={evaluateMutation.isPending}
+                  disabled={evaluationActive}
                 >
                   {t("执行匹配评估")}</Button>
               </EmptyState>

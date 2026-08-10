@@ -85,6 +85,7 @@ Copy-Item .env.example .env
 - `VULNFLANKER_API_BIND` 为后端接口设置，建议保持默认仅本地可访问。
 - `VULNFLANKER_AGENT_INGRESS_BIND` 为Agent资产数据快照上报接口设置，如需使用资产Agent功能，则建议设置为资产可访问的地址掩码（如0.0.0.0）。
 - `VULNFLANKER_FRONTEND_BIND` 为前端访问接口设置，建议保持默认。
+- `VULNFLANKER_LARGE_SCALE_MODE` 为平台部署规模预设，默认保持 `false`。标准模式已经启用风险匹配后台任务、批量查询、分批提交、进度展示和增量写入等全部优化；只有需要多个 Console API 与 Agent API 业务进程的大规模生产环境才设置为 `true`。具体进程数由平台内部预设，不需要也不支持用户分别配置。
 - 为保证密钥安全，在保存 AI 服务提供商 API 密钥前，需设置 `VULNFLANKER_AI_KEY_ENCRYPTION_KEY`。
 - 可于 `VULNFLANKER_BOOTSTRAP_ADMIN_PASSWORD` 直接设定管理员账号密码，留空则会在初次启动时开启首次启动的密码设定页面。
 
@@ -106,6 +107,14 @@ http://127.0.0.1:8100/
 - Agent 接入服务健康检查：`http://127.0.0.1:8001/agent/v1/health/live`
 
 `deploy/docker-compose.yml` 中的 Compose 文件专门针对演示和开发用途进行了优化。它使用源代码绑定挂载，并为后端进程启用了重新加载。
+
+默认的标准模式使用单个 Console API 和单个 Agent API 业务进程，并复用现有 Worker 执行后台风险匹配。仅在平台规模需要多个 API 业务进程时设置：
+
+```env
+VULNFLANKER_LARGE_SCALE_MODE=true
+```
+
+该开关只选择平台内置的多 API 进程预设，不提供进程数、批大小或连接池等用户级调优项。
 
 ## Agent
 

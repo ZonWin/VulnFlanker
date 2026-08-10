@@ -6,7 +6,13 @@ from datetime import UTC, datetime
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import AIEnrichmentBatchRun, IntelCollectionRun, MatchResult, VerificationTask
+from app.db.models import (
+    AIEnrichmentBatchRun,
+    IntelCollectionRun,
+    MatchEvaluationRun,
+    MatchResult,
+    VerificationTask,
+)
 from app.schemas.task_center import (
     TaskCenterItemOut,
     TaskCenterItemType,
@@ -60,6 +66,8 @@ def list_task_center_items(
         items.extend(_risk_queue_items(db, limit=normalized_limit))
     if item_type in (None, "ai_enrichment"):
         items.extend(_ai_enrichment_items(db, limit=normalized_limit))
+    if item_type in (None, "match_evaluation"):
+        items.extend(_match_evaluation_items(db, limit=normalized_limit))
 
     filtered = [
         item
@@ -252,6 +260,55 @@ def _ai_enrichment_items(db: Session, *, limit: int) -> list[TaskCenterItemOut]:
     return items
 
 
+def _match_evaluation_items(db: Session, *, limit: int) -> list[TaskCenterItemOut]:
+    statement = (
+        select(MatchEvaluationRun)
+        .order_by(
+            desc(MatchEvaluationRun.created_at),
+            desc(MatchEvaluationRun.updated_at),
+        )
+        .limit(limit)
+    )
+    items: list[TaskCenterItemOut] = []
+    for run in db.scalars(statement).all():
+        if run.asset_id and run.vulnerability_id:
+            title = f"定向匹配评估 {run.asset_id} / {run.vulnerability_id}"
+        elif run.asset_id:
+            title = f"资产匹配评估 {run.asset_id}"
+        elif run.vulnerability_id:
+            title = f"漏洞匹配评估 {run.vulnerability_id}"
+        else:
+            title = "全量风险匹配评估"
+        items.append(
+            TaskCenterItemOut(
+                id=f"match_evaluation:{run.id}",
+                raw_id=run.id,
+                item_type="match_evaluation",
+                title=title,
+                status=run.status,
+                status_group=_match_evaluation_status_group(run.status),
+                source="matching",
+                trigger_type=run.trigger_type,
+                asset_id=run.asset_id,
+                vulnerability_id=run.vulnerability_id,
+                started_at=run.started_at or run.created_at,
+                finished_at=run.finished_at,
+                updated_at=run.updated_at,
+                error_message=run.recent_error,
+                detail_path="/matching",
+                available_actions=["view"],
+                metrics={
+                    "total_count": run.total_count,
+                    "processed_count": run.processed_count,
+                    "evaluated_count": run.evaluated_count,
+                    "skipped_count": run.skipped_count,
+                    "failed_count": run.failed_count,
+                },
+            )
+        )
+    return items
+
+
 def _match_result_updated_at(db: Session, match_result_id: str):
     result = db.scalar(
         select(MatchResult)
@@ -354,6 +411,18 @@ def _ai_enrichment_status_group(status: str) -> TaskCenterStatusGroup:
         return "failed"
     if status == "cancelled":
         return "cancelled"
+    return "attention"
+
+
+def _match_evaluation_status_group(status: str) -> TaskCenterStatusGroup:
+    if status == "queued":
+        return "pending"
+    if status == "running":
+        return "running"
+    if status == "completed":
+        return "success"
+    if status == "failed":
+        return "failed"
     return "attention"
 
 

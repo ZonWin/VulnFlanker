@@ -25,6 +25,7 @@ from app.db.models.match_result import (
     RiskQueueEvent,
     RiskCodeCounter,
 )
+from app.db.models.match_evaluation_run import MatchEvaluationRun
 from app.db.models.ownership import BusinessSystem, Person, ResponsibilityTeam
 from app.db.models.platform_settings import PlatformSettings
 from app.db.models.rule_numeric_config import RuleNumericConfig
@@ -62,6 +63,7 @@ __all__ = [
     "EmailDeliveryAttempt",
     "EmailSettings",
     "MatchEvidence",
+    "MatchEvaluationRun",
     "MatchResult",
     "MatchResultHandlingRecord",
     "RiskCodeCounter",

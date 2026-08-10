@@ -80,10 +80,10 @@ def test_phase2_to_6a_joint_flow_reaches_agent_verification_evidence(
         "/api/v1/match-results/evaluate",
         json={"asset_id": asset_id, "vulnerability_id": vulnerability.canonical_id},
     )
-    assert evaluate_response.status_code == 200
+    assert evaluate_response.status_code == 202
     evaluate_payload = evaluate_response.json()
     assert evaluate_payload["evaluated_count"] == 1
-    match_result_id = evaluate_payload["result_ids"][0]
+    match_result_id = evaluate_payload["sample_result_ids"][0]
 
     match_result = db_session.get(MatchResult, match_result_id)
     assert match_result is not None

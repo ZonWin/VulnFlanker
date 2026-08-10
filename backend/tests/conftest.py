@@ -21,7 +21,26 @@ from app.services.login_security import (
     LoginSecurityService,
     get_login_security_service,
 )
+from app.services.match_evaluation_runs import run_match_evaluation
+from app.api.routes import match_results as match_results_routes
 from app.core.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def execute_match_evaluation_tasks_inline(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    """Keep existing API flow tests deterministic while production stays async."""
+
+    class InlineTaskResult:
+        id = "inline-match-evaluation-task"
+
+    def delay(run_id: str) -> InlineTaskResult:
+        run_match_evaluation(db_session, run_id)
+        return InlineTaskResult()
+
+    monkeypatch.setattr(match_results_routes.run_match_evaluation_task, "delay", delay)
 
 
 @pytest.fixture

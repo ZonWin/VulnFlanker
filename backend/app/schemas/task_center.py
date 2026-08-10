@@ -11,6 +11,7 @@ TaskCenterItemType = Literal[
     "intel_collection",
     "risk_queue_item",
     "ai_enrichment",
+    "match_evaluation",
 ]
 TaskCenterStatusGroup = Literal[
     "pending",

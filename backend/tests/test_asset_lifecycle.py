@@ -33,7 +33,7 @@ def test_delete_asset_removes_risks_and_can_keep_agent_for_reingestion(
         "/api/v1/match-results/evaluate",
         json={"asset_id": asset_id, "vulnerability_id": vulnerability.canonical_id},
     )
-    assert evaluate_response.status_code == 200
+    assert evaluate_response.status_code == 202
     match_result = db_session.scalar(select(MatchResult))
     assert match_result is not None
     task = VerificationTask(

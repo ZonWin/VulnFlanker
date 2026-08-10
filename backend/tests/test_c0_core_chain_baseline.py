@@ -163,7 +163,7 @@ def test_c0_core_chain_demo_baseline_covers_collection_matching_risk_and_verific
     assert safe_asset_response.status_code == 202
 
     evaluate_response = client.post("/api/v1/match-results/evaluate", json={})
-    assert evaluate_response.status_code == 200
+    assert evaluate_response.status_code == 202
     assert evaluate_response.json()["evaluated_count"] == 4
 
     affected_result = _match_result_for(

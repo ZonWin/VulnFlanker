@@ -70,7 +70,7 @@ def test_phase2_to_phase4_joint_flow_matches_ingested_intel_to_asset(
         "/api/v1/match-results/evaluate",
         json={"asset_id": asset_id, "vulnerability_id": vulnerability.canonical_id},
     )
-    assert evaluate_response.status_code == 200
+    assert evaluate_response.status_code == 202
     evaluate_payload = evaluate_response.json()
     assert evaluate_payload["evaluated_count"] == 1
 

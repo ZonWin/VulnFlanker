@@ -76,6 +76,18 @@ export function evaluateMatchResults(body: MatchEvaluationRequest) {
   });
 }
 
+export function getMatchEvaluationRun(runId: string) {
+  return request<MatchEvaluationResponse>(
+    `/api/v1/match-results/evaluations/${runId}`
+  );
+}
+
+export function getMatchEvaluationRuns(limit = 20) {
+  return request<MatchEvaluationResponse[]>("/api/v1/match-results/evaluations", {
+    query: { limit }
+  });
+}
+
 export function createVerificationTask(
   matchResultId: string,
   body: VerificationTaskRequest

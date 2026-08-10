@@ -67,8 +67,8 @@ def _create_affected_match_result(client, db_session, *, canonical_id: str) -> s
             "vulnerability_id": vulnerability.canonical_id,
         },
     )
-    assert evaluate_response.status_code == 200, evaluate_response.text
-    result_ids = evaluate_response.json()["result_ids"]
+    assert evaluate_response.status_code == 202, evaluate_response.text
+    result_ids = evaluate_response.json()["sample_result_ids"]
     assert len(result_ids) == 1
     return result_ids[0]
 

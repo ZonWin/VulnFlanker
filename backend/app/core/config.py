@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     legacy_agent_api_enabled: bool = False
     log_level: str = "INFO"
     system_timezone: str = "Asia/Shanghai"
+    large_scale_mode: bool = False
 
     database_url: str = (
         "postgresql+psycopg://vulnflanker:vulnflanker@localhost:5432/vulnflanker"

@@ -22,8 +22,8 @@ def _create_match_result(client, db_session) -> str:
         "/api/v1/match-results/evaluate",
         json={"vulnerability_id": vulnerability.canonical_id},
     )
-    assert evaluate_response.status_code == 200
-    result_ids = evaluate_response.json()["result_ids"]
+    assert evaluate_response.status_code == 202
+    result_ids = evaluate_response.json()["sample_result_ids"]
     assert len(result_ids) == 1
     return result_ids[0]
 

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from sqlalchemy import and_, or_, select
+import json
+from collections.abc import Iterable, Iterator
+
+from sqlalchemy import and_, or_, select, tuple_
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import get_settings
+from app.core.deployment import deployment_profile
 from app.db.base import utcnow
 from app.db.models import (
     Asset,
@@ -27,6 +32,7 @@ from app.services.rule_numeric_config import (
 from app.services.risk_snapshot import apply_risk_snapshot
 from app.services.risk_codes import RISK_CODE_STATUSES, allocate_risk_code
 from app.services.risk_notifications import (
+    RiskChange,
     capture_risk_state,
     classify_risk_change,
     enqueue_evaluation_deliveries,
@@ -54,6 +60,89 @@ class VulnerabilityNotReadyForMatching(ValueError):
         )
 
 
+def prepare_match_evaluation(
+    db: Session,
+    *,
+    asset_id: str | None = None,
+    vulnerability_id: str | None = None,
+    raise_if_vulnerability_blocked: bool | None = None,
+) -> tuple[list[Asset], list[Vulnerability], int, RuleNumericConfigValues]:
+    assets = _load_assets(db, asset_id)
+    vulnerabilities = _load_vulnerabilities(db, vulnerability_id)
+    numeric_config = get_rule_numeric_config_values(db)
+    allow_product_only_match = is_product_only_matching_enabled(
+        get_platform_settings(db)
+    )
+    should_raise_if_blocked = (
+        bool(vulnerability_id)
+        if raise_if_vulnerability_blocked is None
+        else raise_if_vulnerability_blocked
+    )
+    ready_vulnerabilities: list[Vulnerability] = []
+    skipped_count = 0
+    for vulnerability in vulnerabilities:
+        if is_vulnerability_excluded_from_matching(vulnerability):
+            skipped_count += 1
+            continue
+        if not _ensure_vulnerability_ready(
+            vulnerability,
+            allow_product_only_match=allow_product_only_match,
+            raise_if_blocked=should_raise_if_blocked,
+        ):
+            skipped_count += 1
+            continue
+        ready_vulnerabilities.append(vulnerability)
+    return assets, ready_vulnerabilities, skipped_count, numeric_config
+
+
+def iter_match_pair_batches(
+    assets: list[Asset],
+    vulnerabilities: list[Vulnerability],
+    *,
+    batch_size: int | None = None,
+) -> Iterator[list[tuple[Asset, Vulnerability]]]:
+    effective_batch_size = batch_size or deployment_profile(
+        get_settings()
+    ).matching_batch_size
+    batch: list[tuple[Asset, Vulnerability]] = []
+    for vulnerability in vulnerabilities:
+        for asset in assets:
+            batch.append((asset, vulnerability))
+            if len(batch) >= effective_batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
+
+
+def evaluate_match_batch(
+    db: Session,
+    pairs: Iterable[tuple[Asset, Vulnerability]],
+    *,
+    numeric_config: RuleNumericConfigValues,
+) -> tuple[list[MatchResult], list[RiskChange]]:
+    pair_list = list(pairs)
+    existing_by_pair = _load_existing_match_results(db, pair_list)
+    results: list[MatchResult] = []
+    changes: list[RiskChange] = []
+    for asset, vulnerability in pair_list:
+        existing_result = existing_by_pair.get((asset.id, vulnerability.id))
+        previous = capture_risk_state(existing_result)
+        result = evaluate_asset_vulnerability(
+            db,
+            asset,
+            vulnerability,
+            numeric_config=numeric_config,
+            existing_result=existing_result,
+            readiness_validated=True,
+        )
+        results.append(result)
+        change = classify_risk_change(result, previous)
+        if change is not None:
+            changes.append(change)
+    return results, changes
+
+
 def evaluate_matches(
     db: Session,
     *,
@@ -62,46 +151,22 @@ def evaluate_matches(
     raise_if_vulnerability_blocked: bool | None = None,
     trigger_type: str = "manual",
 ) -> list[MatchResult]:
-    assets = _load_assets(db, asset_id)
-    vulnerabilities = _load_vulnerabilities(db, vulnerability_id)
-    numeric_config = get_rule_numeric_config_values(db)
-    results: list[MatchResult] = []
-    changes = []
-    should_raise_if_blocked = (
-        bool(vulnerability_id)
-        if raise_if_vulnerability_blocked is None
-        else raise_if_vulnerability_blocked
+    assets, vulnerabilities, _, numeric_config = prepare_match_evaluation(
+        db,
+        asset_id=asset_id,
+        vulnerability_id=vulnerability_id,
+        raise_if_vulnerability_blocked=raise_if_vulnerability_blocked,
     )
-
-    for vulnerability in vulnerabilities:
-        if is_vulnerability_excluded_from_matching(vulnerability):
-            continue
-        if not _ensure_vulnerability_ready(
+    results: list[MatchResult] = []
+    changes: list[RiskChange] = []
+    for pair_batch in iter_match_pair_batches(assets, vulnerabilities):
+        batch_results, batch_changes = evaluate_match_batch(
             db,
-            vulnerability,
-            raise_if_blocked=should_raise_if_blocked,
-        ):
-            continue
-        for asset in assets:
-            previous_result = db.scalar(
-                select(MatchResult).where(
-                    and_(
-                        MatchResult.asset_id == asset.id,
-                        MatchResult.vulnerability_id == vulnerability.id,
-                    )
-                )
-            )
-            previous = capture_risk_state(previous_result)
-            result = evaluate_asset_vulnerability(
-                db,
-                asset,
-                vulnerability,
-                numeric_config=numeric_config,
-            )
-            results.append(result)
-            change = classify_risk_change(result, previous)
-            if change is not None:
-                changes.append(change)
+            pair_batch,
+            numeric_config=numeric_config,
+        )
+        results.extend(batch_results)
+        changes.extend(batch_changes)
 
     outcome = process_risk_evaluation_changes(
         db,
@@ -109,8 +174,6 @@ def evaluate_matches(
         trigger_type=trigger_type,
     )
     db.commit()
-    for result in results:
-        db.refresh(result)
     enqueue_evaluation_deliveries(outcome.delivery_ids)
     return results
 
@@ -121,18 +184,22 @@ def evaluate_asset_vulnerability(
     vulnerability: Vulnerability,
     *,
     numeric_config: RuleNumericConfigValues | None = None,
+    existing_result: MatchResult | None = None,
+    readiness_validated: bool = False,
 ) -> MatchResult:
-    if is_vulnerability_excluded_from_matching(vulnerability):
-        raise VulnerabilityNotReadyForMatching(
-            vulnerability,
-            evaluate_vulnerability_readiness(
-                vulnerability,
-                allow_product_only_match=is_product_only_matching_enabled(
-                    get_platform_settings(db)
-                ),
-            ),
+    if not readiness_validated:
+        allow_product_only_match = is_product_only_matching_enabled(
+            get_platform_settings(db)
         )
-    _ensure_vulnerability_ready(db, vulnerability, raise_if_blocked=True)
+        readiness = evaluate_vulnerability_readiness(
+            vulnerability,
+            allow_product_only_match=allow_product_only_match,
+        )
+        if (
+            is_vulnerability_excluded_from_matching(vulnerability)
+            or readiness.match_readiness != MATCH_READY
+        ):
+            raise VulnerabilityNotReadyForMatching(vulnerability, readiness)
     numeric_config = numeric_config or get_rule_numeric_config_values(db)
     scopes = vulnerability.affected_scopes
     if scopes:
@@ -155,7 +222,9 @@ def evaluate_asset_vulnerability(
     else:
         context = build_match_context(asset, vulnerability, numeric_config=numeric_config)
         pipeline_result = evaluate_pipeline(context)
-    match_result = _get_or_create_match_result(db, asset, vulnerability)
+    match_result = existing_result or _get_or_create_match_result(
+        db, asset, vulnerability
+    )
     previous_status = match_result.status
     match_result.asset = asset
     match_result.vulnerability = vulnerability
@@ -434,22 +503,41 @@ def _aggregate_scope_pipeline_results(
 
 
 def _ensure_vulnerability_ready(
-    db: Session,
     vulnerability: Vulnerability,
     *,
+    allow_product_only_match: bool,
     raise_if_blocked: bool,
 ) -> bool:
     readiness = evaluate_vulnerability_readiness(
         vulnerability,
-        allow_product_only_match=is_product_only_matching_enabled(
-            get_platform_settings(db)
-        ),
+        allow_product_only_match=allow_product_only_match,
     )
     if readiness.match_readiness == MATCH_READY:
         return True
     if raise_if_blocked:
         raise VulnerabilityNotReadyForMatching(vulnerability, readiness)
     return False
+
+
+def _load_existing_match_results(
+    db: Session,
+    pairs: list[tuple[Asset, Vulnerability]],
+) -> dict[tuple[str, str], MatchResult]:
+    keys = [(asset.id, vulnerability.id) for asset, vulnerability in pairs]
+    if not keys:
+        return {}
+    statement = (
+        select(MatchResult)
+        .options(
+            selectinload(MatchResult.evidence),
+            selectinload(MatchResult.verification_tasks),
+        )
+        .where(tuple_(MatchResult.asset_id, MatchResult.vulnerability_id).in_(keys))
+    )
+    return {
+        (result.asset_id, result.vulnerability_id): result
+        for result in db.scalars(statement).all()
+    }
 
 
 def _get_or_create_match_result(
@@ -493,30 +581,59 @@ def _replace_evidence(
     match_result: MatchResult,
     pipeline_result: PipelineResult,
 ) -> None:
+    desired = _desired_evidence(pipeline_result)
+    if _evidence_signature(match_result.evidence) == _evidence_signature(desired):
+        return
     match_result.evidence.clear()
-    for evidence in pipeline_result.evidence:
-        match_result.evidence.append(
-            MatchEvidence(
-                evidence_type=str(evidence.get("type") or "rule_evidence"),
-                summary=str(evidence.get("summary") or ""),
-                raw_ref=evidence.get("raw_ref"),
-                confidence=float(evidence.get("confidence") or pipeline_result.confidence),
-                details_json={
-                    "rule_name": evidence.get("rule_name"),
-                    **(evidence.get("details") or {}),
-                },
-            )
+    match_result.evidence.extend(desired)
+
+
+def _desired_evidence(pipeline_result: PipelineResult) -> list[MatchEvidence]:
+    desired = [
+        MatchEvidence(
+            evidence_type=str(evidence.get("type") or "rule_evidence"),
+            summary=str(evidence.get("summary") or ""),
+            raw_ref=evidence.get("raw_ref"),
+            confidence=float(evidence.get("confidence") or pipeline_result.confidence),
+            details_json={
+                "rule_name": evidence.get("rule_name"),
+                **(evidence.get("details") or {}),
+            },
         )
-    for trace_item in pipeline_result.rule_trace:
-        match_result.evidence.append(
-            MatchEvidence(
-                evidence_type="rule_trace",
-                summary=(
-                    f"{trace_item.get('rule_name')} -> "
-                    f"{trace_item.get('status')}: {trace_item.get('reason')}"
-                ),
-                confidence=float(trace_item.get("confidence") or 0.0),
-                details_json=trace_item,
-            )
+        for evidence in pipeline_result.evidence
+    ]
+    desired.extend(
+        MatchEvidence(
+            evidence_type="rule_trace",
+            summary=(
+                f"{trace_item.get('rule_name')} -> "
+                f"{trace_item.get('status')}: {trace_item.get('reason')}"
+            ),
+            confidence=float(trace_item.get("confidence") or 0.0),
+            details_json=trace_item,
         )
+        for trace_item in pipeline_result.rule_trace
+    )
+    return desired
+
+
+def _evidence_signature(evidence_items: Iterable[MatchEvidence]) -> list[str]:
+    signatures = [
+        json.dumps(
+            {
+                "evidence_type": item.evidence_type,
+                "summary": item.summary,
+                "raw_ref": item.raw_ref,
+                "confidence": round(float(item.confidence), 8),
+                "details": item.details_json or {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        for item in evidence_items
+    ]
+    signatures.sort()
+    return signatures
 

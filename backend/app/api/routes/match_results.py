@@ -37,9 +37,17 @@ from app.services.risk import current_risk_config
 from app.services.rule_numeric_config import get_rule_numeric_config_values
 from app.services.matching import (
     VulnerabilityNotReadyForMatching,
-    evaluate_matches,
     reevaluate_match_result,
 )
+from app.services.match_evaluation_runs import (
+    create_match_evaluation_run,
+    fail_match_evaluation_enqueue,
+    get_match_evaluation_run,
+    list_match_evaluation_runs,
+    set_match_evaluation_task_id,
+    to_match_evaluation_response,
+)
+from app.workers.tasks import run_match_evaluation_task
 from app.schemas.email_alert import EmailActionOut
 from app.services.match_result_handling import (
     HANDLING_STATUSES,
@@ -53,24 +61,61 @@ from app.services.risk_notifications import create_manual_risk_email
 router = APIRouter()
 
 
-@router.post("/evaluate", response_model=MatchEvaluationResponse)
+@router.post(
+    "/evaluate",
+    response_model=MatchEvaluationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def evaluate_match_results(
     request: MatchEvaluationRequest,
+    current_user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ) -> MatchEvaluationResponse:
     try:
-        results = evaluate_matches(
+        run, created = create_match_evaluation_run(
             db,
-            asset_id=request.asset_id,
-            vulnerability_id=request.vulnerability_id,
+            request,
+            actor_id=current_user.id,
         )
     except VulnerabilityNotReadyForMatching as exc:
         raise _readiness_http_error(exc) from exc
-    return MatchEvaluationResponse(
-        status="completed",
-        evaluated_count=len(results),
-        result_ids=[result.id for result in results],
-    )
+    if not created:
+        return to_match_evaluation_response(run)
+    try:
+        task = run_match_evaluation_task.delay(run.id)
+        updated = set_match_evaluation_task_id(db, run.id, task.id)
+        return to_match_evaluation_response(updated or run)
+    except Exception as exc:
+        fail_match_evaluation_enqueue(db, run.id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="风险匹配评估任务暂时无法进入队列，请稍后重试。",
+        ) from exc
+
+
+@router.get(
+    "/evaluations",
+    response_model=list[MatchEvaluationResponse],
+)
+async def get_match_evaluation_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[MatchEvaluationResponse]:
+    return list_match_evaluation_runs(db, limit=limit)
+
+
+@router.get(
+    "/evaluations/{run_id}",
+    response_model=MatchEvaluationResponse,
+)
+async def get_match_evaluation_run_detail(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> MatchEvaluationResponse:
+    run = get_match_evaluation_run(db, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Match evaluation run not found")
+    return run
 
 
 @router.get("", response_model=MatchResultListPage | list[MatchResultSummary])

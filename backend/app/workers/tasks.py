@@ -13,6 +13,7 @@ from app.services.email_alerts import (
     send_email_delivery,
 )
 from app.services.notifications import cleanup_expired_notifications
+from app.services.match_evaluation_runs import run_match_evaluation
 from app.services.vulnerability_ai_enrichment import (
     BASIC_EXTRACTION_PROFILE_KEY,
     EXISTING_DATA_LAYER,
@@ -223,6 +224,13 @@ def recompute_match_result(match_result_id: str) -> dict[str, str]:
         "match_result_id": match_result_id,
         "message": "匹配重算任务骨架已预留。",
     }
+
+
+@celery_app.task(name="vulnflanker.run_match_evaluation")
+def run_match_evaluation_task(run_id: str) -> dict[str, object]:
+    with SessionLocal() as db:
+        result = run_match_evaluation(db, run_id)
+        return result.model_dump(mode="json")
 
 
 @celery_app.task(name="vulnflanker.ai_enrich_vulnerability")

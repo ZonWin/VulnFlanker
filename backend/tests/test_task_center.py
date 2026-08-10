@@ -21,8 +21,8 @@ def _create_risk_match_result(client, db_session, *, canonical_id: str) -> str:
         "/api/v1/match-results/evaluate",
         json={"vulnerability_id": vulnerability.canonical_id},
     )
-    assert response.status_code == 200
-    result_ids = response.json()["result_ids"]
+    assert response.status_code == 202
+    result_ids = response.json()["sample_result_ids"]
     assert len(result_ids) == 1
     return result_ids[0]
 
