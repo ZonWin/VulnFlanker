@@ -18,7 +18,7 @@ dependencies = [
   "cryptography>=50,<51",
   "Pillow>=11,<13",
   "celery[redis]>=5.4,<6.0",
-  "redis>=5.0,<6.0",
+  "redis>=5.0,<9.0",
 ]
 
 [project.optional-dependencies]
