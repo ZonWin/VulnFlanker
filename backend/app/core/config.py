@@ -66,6 +66,20 @@ class Settings(BaseSettings):
     session_cookie_name: str = "vulnflanker_session"
     session_ttl_seconds: int = 86_400
     session_cookie_secure: bool = False
+    login_security_enabled: bool = True
+    login_security_secret: str | None = None
+    login_trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128"
+    login_ban_exempt_cidrs: str = ""
+    login_ipv6_prefix_length: int = 64
+    login_captcha_length: int = 5
+    login_captcha_ttl_seconds: int = 120
+    login_captcha_issue_limit: int = 20
+    login_captcha_issue_window_seconds: int = 300
+    login_captcha_failure_limit: int = 20
+    login_captcha_failure_window_seconds: int = 300
+    login_failure_threshold: int = 5
+    login_failure_window_seconds: int = 600
+    login_penalty_decay_seconds: int = 2_592_000
     ai_key_encryption_key: str | None = None
     secret_encryption_key: str | None = None
 
@@ -78,6 +92,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "bootstrap_admin_password",
+        "login_security_secret",
         "ai_key_encryption_key",
         "secret_encryption_key",
         mode="before",
@@ -97,6 +112,37 @@ class Settings(BaseSettings):
         except ZoneInfoNotFoundError as exc:
             raise ValueError("system_timezone must be a valid IANA timezone") from exc
         return normalized
+
+    @field_validator("login_ipv6_prefix_length")
+    @classmethod
+    def _valid_login_ipv6_prefix_length(cls, value: int) -> int:
+        if not 1 <= value <= 128:
+            raise ValueError("login_ipv6_prefix_length must be between 1 and 128")
+        return value
+
+    @field_validator(
+        "login_captcha_length",
+        "login_captcha_ttl_seconds",
+        "login_captcha_issue_limit",
+        "login_captcha_issue_window_seconds",
+        "login_captcha_failure_limit",
+        "login_captcha_failure_window_seconds",
+        "login_failure_threshold",
+        "login_failure_window_seconds",
+        "login_penalty_decay_seconds",
+    )
+    @classmethod
+    def _positive_login_security_value(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("login security numeric settings must be positive")
+        return value
+
+    @field_validator("login_trusted_proxy_cidrs", "login_ban_exempt_cidrs")
+    @classmethod
+    def _valid_login_cidr_list(cls, value: str) -> str:
+        from app.core.client_ip import validate_cidr_list
+
+        return validate_cidr_list(value)
 
     model_config = SettingsConfigDict(
         env_file=".env",

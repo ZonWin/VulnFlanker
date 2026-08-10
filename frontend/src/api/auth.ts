@@ -10,12 +10,22 @@ export interface CurrentUser {
 export interface LoginPayload {
   username: string;
   password: string;
+  captcha_id: string;
+  captcha_answer: string;
 }
 
 export interface SetupAdminPayload {
   username: string;
   password: string;
   display_name?: string | null;
+  captcha_id: string;
+  captcha_answer: string;
+}
+
+export interface CaptchaChallenge {
+  captcha_id: string;
+  image_base64: string;
+  expires_in: number;
 }
 
 export interface LoginResponse {
@@ -31,6 +41,12 @@ export function login(payload: LoginPayload) {
   return request<LoginResponse>("/api/v1/auth/login", {
     method: "POST",
     body: payload
+  });
+}
+
+export function createCaptcha() {
+  return request<CaptchaChallenge>("/api/v1/auth/captcha", {
+    method: "POST"
   });
 }
 

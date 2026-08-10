@@ -96,6 +96,7 @@ services:
         "0.0.0.0",
         "--port",
         "8000",
+        "--no-proxy-headers",
       ]
     env_file:
       - ../.env
@@ -105,6 +106,7 @@ services:
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
       VULNFLANKER_CELERY_BROKER_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
       VULNFLANKER_CELERY_RESULT_BACKEND: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/1"
+      VULNFLANKER_LOGIN_TRUSTED_PROXY_CIDRS: "${VULNFLANKER_LOGIN_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
       VULNFLANKER_WATCHVULN_COLLECTOR_PATH: /usr/local/bin/watchvuln-collector
     depends_on:
       migrate:

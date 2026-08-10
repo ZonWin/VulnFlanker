@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -174,11 +175,13 @@ def authenticate_user(
     ensure_bootstrap_admin(db, settings=settings)
     normalized_username = username.strip()
     user = db.scalar(select(User).where(User.username == normalized_username))
-    if user is None or not user.is_active:
-        _record_login_failed(db, normalized_username, reason="invalid_credentials")
-        return None
-    if not verify_password(password, user.password_hash):
-        _record_login_failed(db, normalized_username, reason="invalid_credentials")
+    password_hash = (
+        user.password_hash
+        if user is not None and user.is_active
+        else _dummy_password_hash()
+    )
+    password_valid = verify_password(password, password_hash)
+    if user is None or not user.is_active or not password_valid:
         return None
     return user
 
@@ -284,17 +287,9 @@ def user_audit_details(user: User) -> dict[str, object | None]:
     }
 
 
-def _record_login_failed(db: Session, username: str, *, reason: str) -> None:
-    create_audit_log(
-        db,
-        action="auth.login_failed",
-        resource_type="user",
-        actor_type="anonymous",
-        outcome="failed",
-        summary="User login failed.",
-        details={"username": username, "reason": reason},
-    )
-    db.commit()
+@lru_cache
+def _dummy_password_hash() -> str:
+    return hash_password(secrets.token_urlsafe(32))
 
 
 def _b64encode(value: bytes) -> str:

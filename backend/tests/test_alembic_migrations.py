@@ -18,4 +18,4 @@ def test_alembic_migrations_have_single_head() -> None:
     heads = script.get_heads()
 
     assert len(heads) == 1, f"Expected one Alembic head, found: {heads}"
-    assert heads == ["d9e8f7a6b5c4"]
+    assert heads == ["e0f1a2b3c4d5"]

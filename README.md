@@ -217,6 +217,9 @@ Documents/                  中英文项目说明文档
 - 任何共享部署的前端都应配置 HTTPS、身份认证边界、网络访问控制和监控。
 - 轮换所有示例密码、Webhook 令牌、Redis 密码、引导密码、Agent 密钥和 AI 加密密钥。
 - **在 HTTPS 环境下启用 `VULNFLANKER_SESSION_COOKIE_SECURE=true`，以设置安全 Cookie。**
+- 登录页使用服务端一次性图片验证码；同一 IP 在 10 分钟内累计 5 次密码错误后，按 5 分钟、15 分钟、1 小时、8 小时、24 小时、永久封禁逐级递增。
+- 共享或生产部署必须设置随机的 `VULNFLANKER_LOGIN_SECURITY_SECRET`，并用 `VULNFLANKER_LOGIN_TRUSTED_PROXY_CIDRS` 精确声明可信反向代理网段；不要无条件信任公网传入的 `X-Forwarded-For`。
+- 管理员无法从 Web 页面登录时，可在 Console API 容器内运行 `python backend/scripts/manage_auth_bans.py list` 查看封禁，并用 `python backend/scripts/manage_auth_bans.py release --ip <IP> --reason <原因>` 解封。
 - 系统已支持 Agent Bearer Secret 身份认证，但 HMAC 重放保护和密钥轮换仍是后续安全加固事项。
 - 当前验证任务均为只读。自动修复和侵入式概念验证执行有意不纳入范围。
 

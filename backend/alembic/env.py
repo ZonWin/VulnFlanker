@@ -8,6 +8,7 @@ from app.db.base import Base
 from app.db.models import (
     AICallLog,
     AIProfile,
+    AuthIpPenalty,
     Asset,
     AssetComponent,
     IntelRawEvent,

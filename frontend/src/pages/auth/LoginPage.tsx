@@ -3,14 +3,21 @@ import { Alert, Button, Card, Form, Input, Typography } from "antd";
 import {
   LockKeyhole,
   LogIn,
+  RefreshCw,
   ShieldCheck,
   UserPlus,
   UserRound
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
 
-import type { LoginPayload, SetupAdminPayload } from "@/api/auth";
+import {
+  createCaptcha,
+  type CaptchaChallenge,
+  type LoginPayload,
+  type SetupAdminPayload
+} from "@/api/auth";
+import { ApiError, getApiErrorCode } from "@/api/client";
 import { useAuth } from "@/app/auth";
 import { platformLogoSrc, usePlatformSettings } from "@/app/platformSettings";
 
@@ -33,9 +40,86 @@ export default function LoginPage() {
   >();
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [captcha, setCaptcha] = useState<CaptchaChallenge | null>(null);
+  const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [blockSeconds, setBlockSeconds] = useState(0);
+  const [permanentlyBlocked, setPermanentlyBlocked] = useState(false);
   const fromState = location.state as LoginLocationState | null;
   const targetPath =
     `${fromState?.from?.pathname ?? "/risk-queue"}${fromState?.from?.search ?? ""}`;
+
+  const refreshCaptcha = useCallback(() => {
+    setCaptchaLoading(true);
+    setCaptcha(null);
+    if (needsSetup) {
+      setupForm.setFieldValue("captcha_answer", "");
+    } else {
+      form.setFieldValue("captcha_answer", "");
+    }
+    void createCaptcha()
+      .then(setCaptcha)
+      .catch((error: unknown) => {
+        setErrorMessage(
+          error instanceof Error ? error.message : t("验证码加载失败")
+        );
+      })
+      .finally(() => setCaptchaLoading(false));
+  }, [form, needsSetup, setupForm]);
+
+  useEffect(() => {
+    refreshCaptcha();
+  }, [refreshCaptcha]);
+
+  useEffect(() => {
+    if (!captcha) {
+      return;
+    }
+    const timeout = window.setTimeout(
+      refreshCaptcha,
+      Math.max(10, captcha.expires_in - 5) * 1000
+    );
+    return () => window.clearTimeout(timeout);
+  }, [captcha, refreshCaptcha]);
+
+  useEffect(() => {
+    if (blockSeconds <= 0) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setBlockSeconds((current) => {
+        if (current <= 1) {
+          window.clearInterval(interval);
+          refreshCaptcha();
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [blockSeconds > 0, refreshCaptcha]);
+
+  const handleAuthFailure = (error: unknown) => {
+    const code = getApiErrorCode(error);
+    if (code === "IP_BLOCKED_PERMANENT") {
+      setPermanentlyBlocked(true);
+      setErrorMessage(t("当前 IP 已被永久封禁，请联系管理员解封"));
+      return;
+    }
+    if (code === "IP_BLOCKED_TEMPORARY") {
+      const retryAfter = getRetryAfterSeconds(error);
+      setBlockSeconds(retryAfter);
+      setErrorMessage(null);
+      return;
+    }
+    if (code === "LOGIN_RATE_LIMITED") {
+      const retryAfter = getRetryAfterSeconds(error);
+      setBlockSeconds(retryAfter);
+      setErrorMessage(null);
+      return;
+    }
+    setErrorMessage(error instanceof Error ? error.message : t("登录失败"));
+    refreshCaptcha();
+  };
 
   if (!isLoading && isAuthenticated) {
     return <Navigate to={targetPath} replace />;
@@ -72,16 +156,14 @@ export default function LoginPage() {
                   void setupAdminAsync({
                     username: values.username,
                     password: values.password,
-                    display_name: values.display_name || null
+                    display_name: values.display_name || null,
+                    captcha_id: captcha?.captcha_id ?? "",
+                    captcha_answer: values.captcha_answer
                   })
                     .then(() => {
                       navigate(targetPath, { replace: true });
                     })
-                    .catch((error: unknown) => {
-                      setErrorMessage(
-                        error instanceof Error ? error.message : t("初始化失败")
-                      );
-                    })
+                    .catch(handleAuthFailure)
                     .finally(() => {
                       setSubmitting(false);
                     });
@@ -92,7 +174,7 @@ export default function LoginPage() {
                     className="login-error"
                     type="error"
                     showIcon
-                    message={errorMessage}
+                    title={errorMessage}
                   />
                 ) : null}
 
@@ -158,6 +240,12 @@ export default function LoginPage() {
                   />
                 </Form.Item>
 
+                <CaptchaField
+                  captcha={captcha}
+                  loading={captchaLoading}
+                  onRefresh={refreshCaptcha}
+                />
+
                 <Form.Item shouldUpdate>
                   {() => (
                     <Button
@@ -166,6 +254,9 @@ export default function LoginPage() {
                       htmlType="submit"
                       icon={<UserPlus size={17} />}
                       loading={submitting}
+                      disabled={
+                        !captcha || blockSeconds > 0 || permanentlyBlocked
+                      }
                     >
                       {t("创建管理员并进入系统")}</Button>
                   )}
@@ -175,7 +266,7 @@ export default function LoginPage() {
               <Alert
                 type="info"
                 showIcon
-                message={t("仅在系统不存在活跃超级管理员时开放初始化")}
+                title={t("仅在系统不存在活跃超级管理员时开放初始化")}
               />
             </>
           ) : (
@@ -188,15 +279,14 @@ export default function LoginPage() {
                 onFinish={(values) => {
                   setSubmitting(true);
                   setErrorMessage(null);
-                  void loginAsync(values)
+                  void loginAsync({
+                    ...values,
+                    captcha_id: captcha?.captcha_id ?? ""
+                  })
                     .then(() => {
                       navigate(targetPath, { replace: true });
                     })
-                    .catch((error: unknown) => {
-                      setErrorMessage(
-                        error instanceof Error ? error.message : t("登录失败")
-                      );
-                    })
+                    .catch(handleAuthFailure)
                     .finally(() => {
                       setSubmitting(false);
                     });
@@ -207,7 +297,7 @@ export default function LoginPage() {
                     className="login-error"
                     type="error"
                     showIcon
-                    message={errorMessage}
+                    title={errorMessage}
                   />
                 ) : null}
 
@@ -223,6 +313,15 @@ export default function LoginPage() {
                   />
                 </Form.Item>
 
+                {blockSeconds > 0 ? (
+                  <Alert
+                    className="login-error"
+                    type="warning"
+                    showIcon
+                    title={t("还需等待 {{v0}} 秒", { v0: blockSeconds })}
+                  />
+                ) : null}
+
                 <Form.Item
                   name="password"
                   label={t("密码")}
@@ -235,6 +334,12 @@ export default function LoginPage() {
                   />
                 </Form.Item>
 
+                <CaptchaField
+                  captcha={captcha}
+                  loading={captchaLoading}
+                  onRefresh={refreshCaptcha}
+                />
+
                 <Form.Item shouldUpdate>
                   {() => (
                     <Button
@@ -243,6 +348,9 @@ export default function LoginPage() {
                       htmlType="submit"
                       icon={<LogIn size={17} />}
                       loading={submitting}
+                      disabled={
+                        !captcha || blockSeconds > 0 || permanentlyBlocked
+                      }
                     >
                       {t("登录")}</Button>
                   )}
@@ -254,4 +362,75 @@ export default function LoginPage() {
       </section>
     </main>
   );
+}
+
+function CaptchaField({
+  captcha,
+  loading,
+  onRefresh
+}: {
+  captcha: CaptchaChallenge | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <Form.Item label={t("验证码")} required>
+      <div className="login-captcha-row">
+        <Form.Item
+          name="captcha_answer"
+          noStyle
+          rules={[{ required: true, message: t("请输入验证码") }]}
+        >
+          <Input
+            autoComplete="off"
+            maxLength={8}
+            placeholder={t("输入图中字符")}
+          />
+        </Form.Item>
+        <button
+          className="login-captcha-image"
+          type="button"
+          onClick={onRefresh}
+          aria-label={t("刷新验证码")}
+          disabled={!captcha || loading}
+        >
+          {captcha ? (
+            <img
+              src={`data:image/png;base64,${captcha.image_base64}`}
+              alt={t("验证码图片，点击可刷新")}
+            />
+          ) : (
+            <span>{t("加载中")}</span>
+          )}
+        </button>
+        <Button
+          type="text"
+          icon={<RefreshCw size={17} />}
+          onClick={onRefresh}
+          loading={loading}
+          aria-label={t("刷新验证码")}
+        />
+      </div>
+    </Form.Item>
+  );
+}
+
+function getRetryAfterSeconds(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return 60;
+  }
+  const payload = error.detail;
+  if (!payload || typeof payload !== "object" || !("detail" in payload)) {
+    return 60;
+  }
+  const detail = payload.detail;
+  if (
+    !detail ||
+    typeof detail !== "object" ||
+    !("retry_after_seconds" in detail) ||
+    typeof detail.retry_after_seconds !== "number"
+  ) {
+    return 60;
+  }
+  return Math.max(1, Math.ceil(detail.retry_after_seconds));
 }

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from collections.abc import Callable
+import json
+import secrets
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +16,12 @@ from app.db.base import Base
 from app.db.models import User
 from app.main import app
 from app.services.auth import hash_password
+from app.services.login_security import (
+    InMemoryLoginSecurityStore,
+    LoginSecurityService,
+    get_login_security_service,
+)
+from app.core.config import Settings
 
 
 @pytest.fixture
@@ -54,13 +63,51 @@ def authenticated_user(db_session: Session) -> User:
 
 
 @pytest.fixture
-def anonymous_client(db_session: Session) -> Generator[TestClient, None, None]:
+def login_security_service() -> LoginSecurityService:
+    return LoginSecurityService(
+        InMemoryLoginSecurityStore(),
+        Settings(
+            _env_file=None,
+            login_security_secret="test-login-security-secret",
+        ),
+    )
+
+
+@pytest.fixture
+def captcha_payload(
+    login_security_service: LoginSecurityService,
+) -> Callable[[], dict[str, str]]:
+    def create() -> dict[str, str]:
+        captcha_id = secrets.token_urlsafe(12)
+        answer = "AB234"
+        payload = json.dumps(
+            {
+                "answer_digest": login_security_service._captcha_digest(
+                    captcha_id, answer
+                ),
+                "ip_key": "127.0.0.1/32",
+            }
+        )
+        login_security_service.store.put_captcha(captcha_id, payload, 120)
+        return {"captcha_id": captcha_id, "captcha_answer": answer}
+
+    return create
+
+
+@pytest.fixture
+def anonymous_client(
+    db_session: Session,
+    login_security_service: LoginSecurityService,
+) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_login_security_service] = (
+        lambda: login_security_service
+    )
     try:
-        yield TestClient(app)
+        yield TestClient(app, client=("127.0.0.1", 50000))
     finally:
         app.dependency_overrides.clear()
 
@@ -69,6 +116,7 @@ def anonymous_client(db_session: Session) -> Generator[TestClient, None, None]:
 def client(
     db_session: Session,
     authenticated_user: User,
+    login_security_service: LoginSecurityService,
 ) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
@@ -78,7 +126,10 @@ def client(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[require_current_user] = override_require_current_user
+    app.dependency_overrides[get_login_security_service] = (
+        lambda: login_security_service
+    )
     try:
-        yield TestClient(app)
+        yield TestClient(app, client=("127.0.0.1", 50000))
     finally:
         app.dependency_overrides.clear()

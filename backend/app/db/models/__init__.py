@@ -1,4 +1,5 @@
 from app.db.models.audit import AuditLog
+from app.db.models.auth_security import AuthIpPenalty
 from app.db.models.ai_call_log import AICallLog
 from app.db.models.ai_enrichment_batch_run import AIEnrichmentBatchRun
 from app.db.models.ai_profile import AIProfile
@@ -38,6 +39,7 @@ from app.db.models.watchvuln_monitor_config import WatchVulnMonitorConfig
 
 __all__ = [
     "AuditLog",
+    "AuthIpPenalty",
     "AICallLog",
     "AIEnrichmentBatchRun",
     "AIProfile",

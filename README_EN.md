@@ -273,6 +273,17 @@ captures are intentionally not part of the public release branch.
   passwords, Agent secrets, and AI encryption keys.
 - **Set secure cookies behind HTTPS by enabling
   `VULNFLANKER_SESSION_COOKIE_SECURE=true`.**
+- The login page uses a server-validated, single-use image CAPTCHA. Five password
+  failures from one IP in ten minutes advance bans through 5 minutes, 15
+  minutes, 1 hour, 8 hours, 24 hours, and permanent.
+- Shared and production deployments must set a random
+  `VULNFLANKER_LOGIN_SECURITY_SECRET` and precisely define trusted reverse proxy
+  networks with `VULNFLANKER_LOGIN_TRUSTED_PROXY_CIDRS`; never trust public
+  `X-Forwarded-For` values unconditionally.
+- If an administrator cannot sign in through the web console, run
+  `python backend/scripts/manage_auth_bans.py list` inside the Console API
+  container, then release an address with
+  `python backend/scripts/manage_auth_bans.py release --ip <IP> --reason <reason>`.
 - Agent Bearer Secret authentication exists, but HMAC replay protection and
   secret rotation are future hardening items.
 - Current verification tasks are read-only. Automatic remediation and intrusive
