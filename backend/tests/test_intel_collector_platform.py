@@ -221,6 +221,52 @@ def test_incomplete_refresh_keeps_last_active_generation(db_session) -> None:
     assert "complete terminal page" in (failed_run.error_message or "")
 
 
+def test_delta_activation_only_replaces_changed_vulnerabilities(db_session) -> None:
+    first = Vulnerability(canonical_id="CVE-2026-9010", title="First")
+    second = Vulnerability(canonical_id="CVE-2026-9011", title="Second")
+    db_session.add_all((first, second))
+    db_session.flush()
+    collector = StaticCollector()
+
+    baseline = begin_generation(db_session, collector)
+    for vulnerability in (first, second):
+        upsert_source_contribution(
+            db_session,
+            run=baseline,
+            vulnerability_id=vulnerability.id,
+            external_key=vulnerability.canonical_id,
+            contribution={"description": f"old-{vulnerability.canonical_id}"},
+        )
+    baseline.completeness_json = {"complete": True, "terminal_page_seen": True}
+    mark_generation_ready(db_session, baseline)
+    activate_generation(db_session, baseline)
+    db_session.commit()
+
+    delta = begin_generation(db_session, collector)
+    upsert_source_contribution(
+        db_session,
+        run=delta,
+        vulnerability_id=first.id,
+        external_key=first.canonical_id,
+        contribution={"description": "new-first"},
+    )
+    delta.completeness_json = {"complete": True, "terminal_page_seen": True}
+    mark_generation_ready(db_session, delta)
+    activate_generation(db_session, delta)
+    db_session.commit()
+    db_session.expire_all()
+
+    active = db_session.scalars(
+        select(VulnerabilitySourceContribution)
+        .where(VulnerabilitySourceContribution.is_active.is_(True))
+        .order_by(VulnerabilitySourceContribution.vulnerability_id)
+    ).all()
+    assert len(active) == 2
+    active_by_vulnerability = {row.vulnerability_id: row for row in active}
+    assert active_by_vulnerability[first.id].generation_id == delta.generation_id
+    assert active_by_vulnerability[second.id].generation_id == baseline.generation_id
+
+
 @dataclass
 class ContributionFixture:
     source_name: str

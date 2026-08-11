@@ -85,6 +85,11 @@ def stage_collector_page(
 ) -> tuple[int, int]:
     if run.status != "staging" or not run.generation_id:
         raise ValueError("collection run is not an open staging generation")
+    page_mode = page.metadata.get("mode")
+    if page_mode in {"snapshot", "baseline"}:
+        run.update_mode = "snapshot"
+    elif page_mode in {"delta", "modified_window"}:
+        run.update_mode = str(page_mode)
 
     stored = 0
     for record in page.records:
@@ -202,18 +207,28 @@ def activate_generation(db: Session, run: IntelCollectionRun) -> IntelCollection
 
     previous_generation_id = config.active_generation_id
     now = utcnow()
+    incremental = run.update_mode in {"delta", "modified_window"}
 
     # The caller controls the outer commit. A nested transaction ensures that
     # all active flags and the source pointer switch together.
     with db.begin_nested():
-        db.execute(
-            update(VulnerabilitySourceContribution)
-            .where(
-                VulnerabilitySourceContribution.source_name == run.source_name,
-                VulnerabilitySourceContribution.is_active.is_(True),
-            )
-            .values(is_active=False)
+        contribution_deactivation = update(VulnerabilitySourceContribution).where(
+            VulnerabilitySourceContribution.source_name == run.source_name,
+            VulnerabilitySourceContribution.is_active.is_(True),
         )
+        if incremental:
+            changed_vulnerability_ids = select(
+                VulnerabilitySourceContribution.vulnerability_id
+            ).where(
+                VulnerabilitySourceContribution.source_name == run.source_name,
+                VulnerabilitySourceContribution.generation_id == run.generation_id,
+            )
+            contribution_deactivation = contribution_deactivation.where(
+                VulnerabilitySourceContribution.vulnerability_id.in_(
+                    changed_vulnerability_ids
+                )
+            )
+        db.execute(contribution_deactivation.values(is_active=False))
         db.execute(
             update(VulnerabilitySourceContribution)
             .where(
@@ -222,14 +237,23 @@ def activate_generation(db: Session, run: IntelCollectionRun) -> IntelCollection
             )
             .values(is_active=True)
         )
-        db.execute(
-            update(VulnerabilityAffectedScope)
-            .where(
-                VulnerabilityAffectedScope.source_name == run.source_name,
-                VulnerabilityAffectedScope.is_active.is_(True),
-            )
-            .values(is_active=False)
+        scope_deactivation = update(VulnerabilityAffectedScope).where(
+            VulnerabilityAffectedScope.source_name == run.source_name,
+            VulnerabilityAffectedScope.is_active.is_(True),
         )
+        if incremental:
+            changed_scope_vulnerability_ids = select(
+                VulnerabilityAffectedScope.vulnerability_id
+            ).where(
+                VulnerabilityAffectedScope.source_name == run.source_name,
+                VulnerabilityAffectedScope.generation_id == run.generation_id,
+            )
+            scope_deactivation = scope_deactivation.where(
+                VulnerabilityAffectedScope.vulnerability_id.in_(
+                    changed_scope_vulnerability_ids
+                )
+            )
+        db.execute(scope_deactivation.values(is_active=False))
         db.execute(
             update(VulnerabilityAffectedScope)
             .where(
@@ -292,6 +316,7 @@ def collect_generation(
     trigger_type: str = "manual",
     parameters: dict[str, Any] | None = None,
     normalize_page: Callable[[Session, IntelCollectionRun, CollectorPage], None] | None = None,
+    after_activate: Callable[[Session, IntelCollectionRun], None] | None = None,
     **fetch_kwargs: Any,
 ) -> IntelCollectionRun:
     """Run one collector generation while preserving the last active data on failure."""
@@ -310,6 +335,8 @@ def collect_generation(
             db.commit()
         mark_generation_ready(db, run)
         activate_generation(db, run)
+        if after_activate is not None:
+            after_activate(db, run)
         db.commit()
         return run
     except Exception as exc:

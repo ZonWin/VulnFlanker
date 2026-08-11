@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     cisa_kev_monitor_interval_seconds: int = 86_400
     cisa_kev_monitor_limit: int | None = None
     cisa_kev_monitor_tick_seconds: int = 300
+    cve_list_release_api_url: str = (
+        "https://api.github.com/repos/CVEProject/cvelistV5/releases/latest"
+    )
+    cve_list_delta_log_url: str = (
+        "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/deltaLog.json"
+    )
+    cve_list_page_size: int = 500
+    cve_list_timeout_seconds: int = 60
+    nvd_cve_api_url: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    nvd_api_key: str | None = None
+    nvd_page_size: int = 2_000
+    nvd_timeout_seconds: int = 60
+    nvd_overlap_seconds: int = 300
     aliyun_avd_high_risk_url: str = "https://avd.aliyun.com/high-risk/list"
     watchvuln_collector_command: str | None = None
     watchvuln_collector_path: str | None = None
@@ -95,6 +108,7 @@ class Settings(BaseSettings):
         "login_security_secret",
         "ai_key_encryption_key",
         "secret_encryption_key",
+        "nvd_api_key",
         mode="before",
     )
     @classmethod
@@ -135,6 +149,26 @@ class Settings(BaseSettings):
     def _positive_login_security_value(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("login security numeric settings must be positive")
+        return value
+
+    @field_validator(
+        "cve_list_page_size",
+        "cve_list_timeout_seconds",
+        "nvd_page_size",
+        "nvd_timeout_seconds",
+        "nvd_overlap_seconds",
+    )
+    @classmethod
+    def _positive_intel_source_value(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("intel source numeric settings must be positive")
+        return value
+
+    @field_validator("nvd_page_size")
+    @classmethod
+    def _valid_nvd_page_size(cls, value: int) -> int:
+        if value > 2_000:
+            raise ValueError("nvd_page_size must not exceed the NVD limit of 2000")
         return value
 
     @field_validator("login_trusted_proxy_cidrs", "login_ban_exempt_cidrs")

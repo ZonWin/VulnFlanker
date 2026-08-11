@@ -52,7 +52,16 @@ def build_builtin_registry() -> CollectorRegistry:
     # without creating a connector package import cycle.
     from app.connectors.aliyun_avd import AliyunAvdConnector
     from app.connectors.cisa_kev import CisaKevConnector
+    from app.connectors.cve_list_v5 import CveListV5Connector
+    from app.connectors.nvd import NvdCveConnector
 
     registry = CollectorRegistry()
-    registry.register_many((CisaKevConnector(), AliyunAvdConnector()))
+    registry.register_many(
+        (
+            CisaKevConnector(),
+            AliyunAvdConnector(),
+            CveListV5Connector(),
+            NvdCveConnector(),
+        )
+    )
     return registry
