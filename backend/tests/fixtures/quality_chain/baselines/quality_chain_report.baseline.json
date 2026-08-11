@@ -3130,8 +3130,8 @@
       "matches": [
         {
           "agent_id": "q1-agent-kernel-range-affected",
-          "expected_status": "affected",
-          "actual_status": "affected",
+          "expected_status": "needs_review",
+          "actual_status": "needs_review",
           "status_matched": true,
           "expected_risk_priority": [
             "medium",

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.matching.base import MatchContext, MatchRule, RuleResult, rule_confidence
+from app.matching.product_identity import MIN_CONCLUSIVE_PRODUCT_SCORE
 from app.matching.utils import normalize_name, product_candidates
 from app.matching.versioning import (
     VersionComparison,
@@ -40,7 +41,11 @@ class VersionRule(MatchRule):
     rule_name = "version_rule"
 
     def evaluate(self, context: MatchContext) -> RuleResult:
-        product_matches = product_candidates(context)
+        product_matches = [
+            candidate
+            for candidate in product_candidates(context)
+            if int(candidate.get("match_score") or 0) >= MIN_CONCLUSIVE_PRODUCT_SCORE
+        ]
         if not product_matches:
             confidence = rule_confidence(
                 context,

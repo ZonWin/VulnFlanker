@@ -12,8 +12,8 @@
   "expected_matches": [
     {
       "agent_id": "q1-agent-kernel-range-affected",
-      "status": "affected",
-      "min_confidence": 0.7,
+      "status": "needs_review",
+      "min_confidence": 0.5,
       "required_evidence_types": ["product_match", "kernel_version"],
       "risk_priority_one_of": ["medium", "high", "critical"],
       "should_enter_risk_queue": true

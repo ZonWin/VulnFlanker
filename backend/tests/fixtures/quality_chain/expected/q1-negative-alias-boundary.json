@@ -13,7 +13,7 @@
     {
       "agent_id": "q1-agent-negative-apache2-only",
       "status": "not_affected",
-      "required_evidence_types": ["product_match"],
+      "required_evidence_types": ["product_no_match"],
       "risk_priority_one_of": ["none"],
       "should_enter_risk_queue": false
     }

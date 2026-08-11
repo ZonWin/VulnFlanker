@@ -12,6 +12,7 @@ class MatchContext:
     asset_exposures: list[dict] = field(default_factory=list)
     vulnerability_conditions: dict = field(default_factory=dict)
     rule_confidences: dict[str, dict[str, float]] = field(default_factory=dict)
+    product_candidate_cache: list[dict] | None = None
 
 
 def rule_confidence(
