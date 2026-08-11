@@ -85,6 +85,9 @@ class EnrichmentMapperRegistry:
         except KeyError as exc:
             raise KeyError(f"unknown enrichment mapper: {source_name}") from exc
 
+    def source_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._mappers))
+
 
 def normalize_enrichment_page(
     db: Session,

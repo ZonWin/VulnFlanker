@@ -1,10 +1,19 @@
-from app.db.models import IntelCollectionRun
+from sqlalchemy import select
+
+from app.db.models import IntelCollectionRun, IntelSourceConfig
 from app.db.session import SessionLocal
 from app.services.cisa_kev_monitor import (
     get_cisa_kev_monitor_config,
     should_run_cisa_kev_monitor,
 )
 from app.services.intel_ingestion import collect_aliyun_avd, collect_cisa_kev
+from app.services.intel_enrichment_orchestration import (
+    collect_registered_enrichment_source,
+    dispatch_enrichment_reevaluation,
+    pending_enrichment_reevaluation_runs,
+    reevaluate_enrichment_run,
+    reserve_due_enrichment_sources,
+)
 from app.services.intel_normalization import normalize_raw_event
 from app.services.intel_tracking import complete_collection_run, fail_collection_run
 from app.services.email_alerts import (
@@ -108,6 +117,96 @@ def collect_vulnerability_source(
             "failed_count": stats.failed_count,
         }
 
+
+@celery_app.task(name="vulnflanker.collect_enrichment_source")
+def collect_enrichment_source_task(
+    source_name: str,
+    trigger_type: str = "manual",
+    limit: int | None = None,
+    force_baseline: bool = False,
+) -> dict[str, str | int | None]:
+    with SessionLocal() as db:
+        run = collect_registered_enrichment_source(
+            db,
+            source_name,
+            trigger_type=trigger_type,
+            limit=limit,
+            force_baseline=force_baseline,
+            dispatch_reevaluation=True,
+        )
+        reevaluation = (run.completeness_json or {}).get("reevaluation") or {}
+        return {
+            "status": run.status,
+            "source_name": run.source_name,
+            "run_id": run.id,
+            "fetched_count": run.fetched_count,
+            "stored_count": run.stored_count,
+            "processed_count": run.processed_count,
+            "failed_count": run.failed_count,
+            "reevaluation_task_id": reevaluation.get("task_id"),
+        }
+
+
+@celery_app.task(name="vulnflanker.dispatch_due_enrichment_sources")
+def dispatch_due_enrichment_sources() -> dict[str, object]:
+    queued: list[str] = []
+    failed: dict[str, str] = {}
+    with SessionLocal() as db:
+        source_names = reserve_due_enrichment_sources(db)
+        for source_name in source_names:
+            try:
+                collect_enrichment_source_task.delay(
+                    source_name,
+                    "scheduled",
+                    None,
+                    False,
+                )
+                queued.append(source_name)
+            except Exception as exc:
+                failed[source_name] = str(exc)[:1000]
+                config = db.scalar(
+                    select(IntelSourceConfig).where(
+                        IntelSourceConfig.source_name == source_name
+                    )
+                )
+                if config is not None:
+                    config.last_error = failed[source_name]
+                    db.add(config)
+        db.commit()
+    return {"status": "completed", "queued": queued, "failed": failed}
+
+
+@celery_app.task(name="vulnflanker.dispatch_pending_enrichment_reevaluations")
+def dispatch_pending_enrichment_reevaluations() -> dict[str, object]:
+    queued: list[str] = []
+    with SessionLocal() as db:
+        runs = pending_enrichment_reevaluation_runs(db)
+        for run in runs:
+            if dispatch_enrichment_reevaluation(db, run):
+                queued.append(run.id)
+    return {"status": "completed", "queued_run_ids": queued}
+
+
+@celery_app.task(name="vulnflanker.reevaluate_enrichment_run")
+def reevaluate_enrichment_run_task(
+    run_id: str,
+    after_vulnerability_id: str | None = None,
+) -> dict[str, str | int | None]:
+    with SessionLocal() as db:
+        result = reevaluate_enrichment_run(
+            db,
+            run_id,
+            after_vulnerability_id=after_vulnerability_id,
+        )
+    if result.next_cursor:
+        reevaluate_enrichment_run_task.delay(run_id, result.next_cursor)
+    return {
+        "status": "queued" if result.next_cursor else "completed",
+        "run_id": run_id,
+        "processed_count": result.processed_count,
+        "failed_count": result.failed_count,
+        "next_cursor": result.next_cursor,
+    }
 
 @celery_app.task(name="vulnflanker.collect_cisa_kev_monitor")
 def collect_cisa_kev_monitor() -> dict[str, str | int]:

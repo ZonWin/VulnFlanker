@@ -769,11 +769,18 @@ def test_cisa_kev_collection_endpoint_exposes_ingested_vulnerability(client, mon
     sources_response = client.get("/api/v1/intel/sources")
     assert sources_response.status_code == 200
     sources_payload = sources_response.json()
-    assert [item["source_name"] for item in sources_payload] == [
+    assert [item["source_name"] for item in sources_payload[:3]] == [
         "cisa-kev",
         "watchvuln",
         "aliyun-avd",
     ]
+    assert {item["source_name"] for item in sources_payload[3:]} == {
+        "cve-list-v5",
+        "nvd",
+        "canonical-ubuntu",
+        "debian-security-tracker",
+        "redhat-csaf",
+    }
     sources = {item["source_name"]: item for item in sources_payload}
     assert sources["cisa-kev"]["last_status"] == "completed"
     assert sources["cisa-kev"]["raw_event_count"] == 1
@@ -1214,6 +1221,12 @@ def test_celery_beat_schedules_cisa_kev_monitor() -> None:
 
     assert schedule["vulnflanker-cisa-kev-monitor"]["task"] == (
         "vulnflanker.collect_cisa_kev_monitor"
+    )
+    assert schedule["vulnflanker-enrichment-source-dispatcher"]["task"] == (
+        "vulnflanker.dispatch_due_enrichment_sources"
+    )
+    assert schedule["vulnflanker-enrichment-reevaluation-dispatcher"]["task"] == (
+        "vulnflanker.dispatch_pending_enrichment_reevaluations"
     )
 
 

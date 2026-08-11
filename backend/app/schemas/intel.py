@@ -13,6 +13,19 @@ class IntelCollectRequest(BaseModel):
     latest_only: bool = True
 
 
+class IntelEnrichmentCollectRequest(BaseModel):
+    limit: int | None = Field(default=None, ge=1, le=5000)
+    async_mode: bool = True
+    force_baseline: bool = False
+
+
+class IntelEnrichmentSourceConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    schedule_seconds: int | None = Field(default=None, ge=300, le=2_592_000)
+    stale_after_seconds: int | None = Field(default=None, ge=300, le=31_536_000)
+    expire_after_seconds: int | None = Field(default=None, ge=600, le=63_072_000)
+
+
 class WatchVulnMonitorConfigUpdate(BaseModel):
     enabled: bool | None = None
     interval_seconds: int | None = Field(default=None, ge=60, le=86_400)
@@ -133,6 +146,15 @@ class IntelCollectionRunOut(BaseModel):
     error_message: str | None
     task_id: str | None
     parameters: dict[str, Any]
+    generation_id: str | None = None
+    update_mode: str | None = None
+    cursor_before: dict[str, Any] = Field(default_factory=dict)
+    cursor_after: dict[str, Any] = Field(default_factory=dict)
+    completeness: dict[str, Any] = Field(default_factory=dict)
+    parser_version: str | None = None
+    artifacts_count: int = 0
+    activated_at: datetime | None = None
+    error_code: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -151,6 +173,19 @@ class IntelSourceStatusOut(BaseModel):
     processed_event_count: int = 0
     failed_event_count: int = 0
     vulnerability_count: int = 0
+    update_mode: str | None = None
+    schedule_seconds: int | None = None
+    stale_after_seconds: int | None = None
+    expire_after_seconds: int | None = None
+    parser_version: str | None = None
+    supports_cursor: bool = False
+    supports_deletions: bool = False
+    active_generation_id: str | None = None
+    last_success_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    next_run_at: datetime | None = None
+    freshness_state: str | None = None
+    freshness_age_seconds: int | None = None
 
 
 class IntelNormalizationQualityOut(BaseModel):

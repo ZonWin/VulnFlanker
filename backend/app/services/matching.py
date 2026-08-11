@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.db.base import utcnow
 from app.db.models import (
     Asset,
+    IntelSourceConfig,
     MatchEvidence,
     MatchResult,
     RiskQueueEvent,
@@ -137,6 +138,7 @@ def evaluate_asset_vulnerability(
     numeric_config = numeric_config or get_rule_numeric_config_values(db)
     scopes = vulnerability.affected_scopes
     if scopes:
+        source_freshness = _source_freshness_for_scopes(db, scopes)
         scope_resolution = resolve_affected_scopes(asset, scopes)
         if scope_resolution.selected:
             pipeline_result = _aggregate_scope_pipeline_results(
@@ -148,6 +150,7 @@ def evaluate_asset_vulnerability(
                             vulnerability,
                             scope,
                             numeric_config=numeric_config,
+                            freshness=source_freshness.get(scope.source_name),
                         ),
                     )
                     for scope in scope_resolution.selected
@@ -506,11 +509,14 @@ def _evaluate_affected_scope(
     scope: VulnerabilityAffectedScope,
     *,
     numeric_config: RuleNumericConfigValues,
+    freshness: dict[str, object] | None = None,
 ) -> PipelineResult:
+    if freshness and freshness.get("state") == "expired":
+        return _expired_source_scope_result(scope, freshness)
     declared = _declared_scope_result(scope)
     if declared is not None:
-        return declared
-    return evaluate_pipeline(
+        return _apply_source_freshness(declared, freshness)
+    result = evaluate_pipeline(
         build_match_context(
             asset,
             vulnerability,
@@ -518,6 +524,109 @@ def _evaluate_affected_scope(
             affected_scope=scope,
         )
     )
+    return _apply_source_freshness(result, freshness)
+
+
+def _source_freshness_for_scopes(
+    db: Session,
+    scopes: list[VulnerabilityAffectedScope],
+) -> dict[str, dict[str, object]]:
+    source_names = {scope.source_name for scope in scopes}
+    configs = db.scalars(
+        select(IntelSourceConfig).where(IntelSourceConfig.source_name.in_(source_names))
+    ).all()
+    states: dict[str, dict[str, object]] = {}
+    for config in configs:
+        if config.last_success_at is None:
+            continue
+        current = utcnow()
+        if config.last_success_at.tzinfo is None:
+            current = current.replace(tzinfo=None)
+        age = max(0, int((current - config.last_success_at).total_seconds()))
+        state = (
+            "expired"
+            if age >= config.expire_after_seconds
+            else "stale" if age >= config.stale_after_seconds else "fresh"
+        )
+        states[config.source_name] = {
+            "state": state,
+            "age_seconds": age,
+            "stale_after_seconds": config.stale_after_seconds,
+            "expire_after_seconds": config.expire_after_seconds,
+            "last_success_at": config.last_success_at.isoformat(),
+        }
+    return states
+
+
+def _expired_source_scope_result(
+    scope: VulnerabilityAffectedScope,
+    freshness: dict[str, object],
+) -> PipelineResult:
+    reason = (
+        f"{scope.source_name} evidence is expired and cannot support an "
+        "authoritative affectedness decision."
+    )
+    return PipelineResult(
+        status="needs_review",
+        confidence=0.5,
+        reason=reason,
+        rule_version="match-source-freshness-v1",
+        evidence=[
+            {
+                "type": "source_freshness",
+                "summary": reason,
+                "confidence": 0.5,
+                "details": freshness,
+            }
+        ],
+        rule_trace=[
+            {
+                "rule_name": "source_freshness_rule",
+                "rule_version": "v1",
+                "executed": True,
+                "status": "needs_review",
+                "confidence": 0.5,
+                "reason": reason,
+                "reason_code": "source_freshness.expired",
+                "uncertain_reason": reason,
+                "input_summary": freshness,
+                "evidence_count": 1,
+            }
+        ],
+    )
+
+
+def _apply_source_freshness(
+    result: PipelineResult,
+    freshness: dict[str, object] | None,
+) -> PipelineResult:
+    if not freshness or freshness.get("state") != "stale":
+        return result
+    summary = "The source data is stale but has not reached its expiry threshold."
+    result.confidence = min(result.confidence, 0.75)
+    result.evidence.append(
+        {
+            "type": "source_freshness",
+            "summary": summary,
+            "confidence": 0.75,
+            "details": freshness,
+        }
+    )
+    result.rule_trace.append(
+        {
+            "rule_name": "source_freshness_rule",
+            "rule_version": "v1",
+            "executed": True,
+            "status": result.status,
+            "confidence": result.confidence,
+            "reason": summary,
+            "reason_code": "source_freshness.stale",
+            "uncertain_reason": summary,
+            "input_summary": freshness,
+            "evidence_count": 1,
+        }
+    )
+    return result
 
 
 def _declared_scope_result(

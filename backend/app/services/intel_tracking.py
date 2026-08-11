@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 import re
 from typing import Any
 
@@ -9,7 +10,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.db.base import utcnow
-from app.db.models import IntelCollectionRun, IntelRawEvent, Vulnerability, VulnerabilitySource
+from app.db.models import (
+    IntelCollectionRun,
+    IntelRawEvent,
+    IntelSourceConfig,
+    Vulnerability,
+    VulnerabilitySource,
+)
 from app.services.severity import normalize_severity_label
 from app.services.vulnerability_product_identity import product_values_conflict
 from app.services.vulnerability_review import is_reason_confirmed
@@ -27,6 +34,11 @@ SOURCE_LABELS = {
     "cisa-kev": "CISA KEV",
     "watchvuln": "WatchVuln",
     "aliyun-avd": "阿里云漏洞库",
+    "cve-list-v5": "CVE List V5",
+    "nvd": "NVD",
+    "canonical-ubuntu": "Canonical Ubuntu Security",
+    "debian-security-tracker": "Debian Security Tracker",
+    "redhat-csaf": "Red Hat CSAF VEX",
 }
 WATCHVULN_SOURCE_LABELS = {
     "avd": "阿里云漏洞库",
@@ -176,29 +188,67 @@ def get_collection_run(db: Session, run_id: str) -> IntelCollectionRunOut | None
 def list_source_statuses(db: Session) -> list[IntelSourceStatusOut]:
     raw_counts = _raw_event_counts(db)
     vulnerability_counts = _vulnerability_counts(db)
+    configs = {
+        config.source_name: config
+        for config in db.scalars(select(IntelSourceConfig)).all()
+    }
     statuses = []
-    for source_name, source_label, parent_source_name in _source_status_specs():
+    for spec in _source_status_specs():
+        source_name = spec["source_name"]
+        config = configs.get(source_name)
         latest_run = db.scalar(
             select(IntelCollectionRun)
             .where(IntelCollectionRun.source_name == source_name)
             .order_by(desc(IntelCollectionRun.started_at))
         )
         counts = raw_counts[source_name]
+        freshness_state, freshness_age = _freshness(config)
+        schedule_seconds = (
+            config.schedule_seconds if config is not None else spec.get("schedule_seconds")
+        )
         statuses.append(
             IntelSourceStatusOut(
                 source_name=source_name,
-                source_label=source_label,
-                parent_source_name=parent_source_name,
-                enabled=True,
+                source_label=spec.get("source_label"),
+                parent_source_name=spec.get("parent_source_name"),
+                enabled=(
+                    config.enabled
+                    if config is not None
+                    else bool(spec.get("legacy_enabled"))
+                ),
                 last_run_id=latest_run.id if latest_run else None,
                 last_status=latest_run.status if latest_run else None,
                 last_started_at=latest_run.started_at if latest_run else None,
                 last_finished_at=latest_run.finished_at if latest_run else None,
-                last_error=latest_run.error_message if latest_run else None,
+                last_error=(
+                    (latest_run.error_message if latest_run else None)
+                    or (config.last_error if config is not None else None)
+                ),
                 raw_event_count=counts["total"],
                 processed_event_count=counts["processed"],
                 failed_event_count=counts["failed"],
                 vulnerability_count=vulnerability_counts[source_name],
+                update_mode=(
+                    config.update_mode if config is not None else spec.get("update_mode")
+                ),
+                schedule_seconds=schedule_seconds,
+                stale_after_seconds=(
+                    config.stale_after_seconds if config is not None else None
+                ),
+                expire_after_seconds=(
+                    config.expire_after_seconds if config is not None else None
+                ),
+                parser_version=spec.get("parser_version"),
+                supports_cursor=bool(spec.get("supports_cursor")),
+                supports_deletions=bool(spec.get("supports_deletions")),
+                active_generation_id=(
+                    config.active_generation_id if config is not None else None
+                ),
+                last_success_at=(config.last_success_at if config is not None else None),
+                last_attempt_at=(config.last_attempt_at if config is not None else None),
+                next_run_at=_next_run_at(config, schedule_seconds),
+                freshness_state=freshness_state,
+                freshness_age_seconds=freshness_age,
             )
         )
     return statuses
@@ -308,12 +358,65 @@ def _vulnerability_counts(db: Session) -> dict[str, int]:
     return counts
 
 
-def _source_status_specs() -> list[tuple[str, str | None, str | None]]:
-    return [
-        ("cisa-kev", SOURCE_LABELS["cisa-kev"], None),
-        ("watchvuln", SOURCE_LABELS["watchvuln"], None),
-        ("aliyun-avd", SOURCE_LABELS["aliyun-avd"], None),
+def _source_status_specs() -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = [
+        {
+            "source_name": source_name,
+            "source_label": SOURCE_LABELS[source_name],
+            "parent_source_name": None,
+            "legacy_enabled": True,
+        }
+        for source_name in KNOWN_INTEL_SOURCES
     ]
+    from app.connectors.registry import build_builtin_registry
+    from app.services.intel_source_collection import build_builtin_mapper_registry
+
+    collectors = build_builtin_registry()
+    mapper_names = set(build_builtin_mapper_registry().source_names())
+    for source_name in sorted(mapper_names):
+        metadata = collectors.get(source_name).metadata
+        specs.append(
+            {
+                "source_name": source_name,
+                "source_label": metadata.display_name,
+                "parent_source_name": None,
+                "legacy_enabled": False,
+                "update_mode": metadata.update_mode.value,
+                "schedule_seconds": metadata.default_schedule_seconds,
+                "parser_version": metadata.parser_version,
+                "supports_cursor": metadata.supports_cursor,
+                "supports_deletions": metadata.supports_deletions,
+            }
+        )
+    return specs
+
+
+def _freshness(config: IntelSourceConfig | None) -> tuple[str | None, int | None]:
+    if config is None:
+        return "never_collected", None
+    if config.last_success_at is None:
+        return "never_collected", None
+    current = utcnow()
+    if config.last_success_at.tzinfo is None:
+        current = current.replace(tzinfo=None)
+    age = max(0, int((current - config.last_success_at).total_seconds()))
+    if age >= config.expire_after_seconds:
+        return "expired", age
+    if age >= config.stale_after_seconds:
+        return "stale", age
+    return "fresh", age
+
+
+def _next_run_at(
+    config: IntelSourceConfig | None,
+    schedule_seconds: int | None,
+):
+    if config is None or not config.enabled or schedule_seconds is None:
+        return None
+    anchor = config.last_attempt_at or config.last_success_at
+    if anchor is None:
+        return utcnow()
+    return anchor + timedelta(seconds=schedule_seconds)
 
 
 def _parse_watchvuln_sources(sources: str) -> list[str]:
@@ -363,6 +466,15 @@ def _to_collection_run_out(run: IntelCollectionRun) -> IntelCollectionRunOut:
         error_message=run.error_message,
         task_id=run.task_id,
         parameters=run.parameters_json or {},
+        generation_id=run.generation_id,
+        update_mode=run.update_mode,
+        cursor_before=run.cursor_before_json or {},
+        cursor_after=run.cursor_after_json or {},
+        completeness=run.completeness_json or {},
+        parser_version=run.parser_version,
+        artifacts_count=run.artifacts_count,
+        activated_at=run.activated_at,
+        error_code=run.error_code,
         created_at=run.created_at,
         updated_at=run.updated_at,
     )

@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     )
     redhat_csaf_page_size: int = 100
     redhat_csaf_timeout_seconds: int = 180
+    intel_enrichment_scheduler_tick_seconds: int = 300
     aliyun_avd_high_risk_url: str = "https://avd.aliyun.com/high-risk/list"
     watchvuln_collector_command: str | None = None
     watchvuln_collector_path: str | None = None
@@ -183,6 +184,7 @@ class Settings(BaseSettings):
         "debian_tracker_timeout_seconds",
         "redhat_csaf_page_size",
         "redhat_csaf_timeout_seconds",
+        "intel_enrichment_scheduler_tick_seconds",
     )
     @classmethod
     def _positive_intel_source_value(cls, value: int) -> int:

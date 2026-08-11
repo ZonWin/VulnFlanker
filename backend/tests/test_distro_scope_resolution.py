@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy import select
 
 from app.db.models import (
     Asset,
     AssetComponent,
+    IntelSourceConfig,
     Vulnerability,
     VulnerabilityAffectedScope,
     VulnerabilitySource,
     VerificationEvidence,
 )
+from app.db.base import utcnow
 from app.matching.scope_resolver import resolve_affected_scopes
 from app.services.matching import evaluate_asset_vulnerability
 from app.services.ubuntu_security import (
@@ -374,6 +378,53 @@ def test_released_jammy_fix_uses_kernel_abi_boundary(db_session) -> None:
     comparison = version_evidence.details_json["comparisons"][0]
     assert comparison["comparator"] == "ubuntu_kernel_abi"
     assert comparison["compare_result"] == 1
+
+
+def test_expired_official_distribution_scope_requires_review(db_session) -> None:
+    asset = _database_asset(db_session)
+    vulnerability = _vulnerability(db_session, "CVE-2026-12349")
+    db_session.add_all(
+        [
+            VulnerabilityAffectedScope(
+                vulnerability_id=vulnerability.id,
+                source_name="canonical-ubuntu",
+                scope_key="jammy-expired",
+                vendor="Canonical",
+                product="linux",
+                ecosystem="deb",
+                distro="ubuntu",
+                distro_release="jammy",
+                source_package="linux",
+                version_scheme="ubuntu_kernel",
+                status="not_affected",
+                default_status="not_affected",
+                source_authority="distribution",
+                authority_score=100,
+            ),
+            IntelSourceConfig(
+                source_name="canonical-ubuntu",
+                enabled=True,
+                schedule_seconds=3600,
+                stale_after_seconds=7200,
+                expire_after_seconds=14400,
+                last_success_at=utcnow() - timedelta(seconds=15000),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = evaluate_asset_vulnerability(db_session, asset, vulnerability)
+
+    assert result.status == "needs_review"
+    freshness = next(
+        item for item in result.evidence if item.evidence_type == "source_freshness"
+    )
+    assert freshness.details_json["state"] == "expired"
+    assert any(
+        item.details_json.get("reason_code") == "source_freshness.expired"
+        for item in result.evidence
+        if item.evidence_type == "rule_trace"
+    )
 
 
 def _vulnerability(db_session, canonical_id: str) -> Vulnerability:

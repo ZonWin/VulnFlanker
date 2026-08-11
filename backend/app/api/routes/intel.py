@@ -17,6 +17,8 @@ from app.schemas.intel import (
     IntelCollectionRunOut,
     IntelCollectionResult,
     IntelCollectRequest,
+    IntelEnrichmentCollectRequest,
+    IntelEnrichmentSourceConfigUpdate,
     IntelSourceVulnerabilityCleanupRequest,
     IntelSourceVulnerabilityCleanupResult,
     IntelRawEventNormalizeResult,
@@ -38,6 +40,11 @@ from app.services.intel_ingestion import (
     ingest_watchvuln_webhook,
 )
 from app.services.intel_normalization import normalize_raw_event
+from app.services.intel_enrichment_orchestration import (
+    collect_registered_enrichment_source,
+    enrichment_source_names,
+    update_enrichment_source_config,
+)
 from app.services.intel_cleanup import clear_source_vulnerabilities
 from app.services.intel_tracking import (
     complete_collection_run,
@@ -55,7 +62,11 @@ from app.services.watchvuln_monitor import (
     get_watchvuln_monitor_status,
     update_watchvuln_monitor_config,
 )
-from app.workers.tasks import collect_vulnerability_source, process_watchvuln_raw_event
+from app.workers.tasks import (
+    collect_enrichment_source_task,
+    collect_vulnerability_source,
+    process_watchvuln_raw_event,
+)
 
 router = APIRouter()
 CONSOLE_AUTH = [Depends(require_current_user)]
@@ -286,6 +297,108 @@ async def get_intel_sources(
     db: Session = Depends(get_db),
 ) -> list[IntelSourceStatusOut]:
     return list_source_statuses(db)
+
+
+@router.get(
+    "/sources/{source_name}",
+    response_model=IntelSourceStatusOut,
+    dependencies=CONSOLE_AUTH,
+)
+async def get_intel_source(
+    source_name: str,
+    db: Session = Depends(get_db),
+) -> IntelSourceStatusOut:
+    return _get_source_status(db, source_name)
+
+
+@router.patch(
+    "/sources/{source_name}",
+    response_model=IntelSourceStatusOut,
+    dependencies=CONSOLE_AUTH,
+)
+async def update_intel_enrichment_source(
+    source_name: str,
+    payload: IntelEnrichmentSourceConfigUpdate,
+    db: Session = Depends(get_db),
+) -> IntelSourceStatusOut:
+    if source_name not in enrichment_source_names():
+        raise HTTPException(status_code=404, detail="Enrichment source not found")
+    try:
+        update_enrichment_source_config(
+            db,
+            source_name,
+            **payload.model_dump(exclude_none=True),
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _get_source_status(db, source_name)
+
+
+@router.post(
+    "/sources/{source_name}/collect",
+    response_model=IntelCollectionResult,
+    dependencies=CONSOLE_AUTH,
+)
+async def collect_intel_enrichment_source(
+    source_name: str,
+    payload: IntelEnrichmentCollectRequest,
+    db: Session = Depends(get_db),
+) -> IntelCollectionResult:
+    if source_name not in enrichment_source_names():
+        raise HTTPException(status_code=404, detail="Enrichment source not found")
+    if payload.force_baseline and source_name not in {"cve-list-v5", "redhat-csaf"}:
+        raise HTTPException(status_code=400, detail="Source does not support forced baseline")
+    if payload.async_mode:
+        try:
+            task = collect_enrichment_source_task.delay(
+                source_name,
+                "manual",
+                payload.limit,
+                payload.force_baseline,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to queue enrichment collection: {exc}",
+            ) from exc
+        return IntelCollectionResult(
+            status="queued",
+            source_name=source_name,
+            task_id=task.id,
+            message="Enrichment collection task queued.",
+        )
+    try:
+        run = collect_registered_enrichment_source(
+            db,
+            source_name,
+            trigger_type="manual",
+            limit=payload.limit,
+            force_baseline=payload.force_baseline,
+            dispatch_reevaluation=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IntelCollectionResult(
+        status=run.status,
+        source_name=run.source_name,
+        run_id=run.id,
+        fetched_count=run.fetched_count,
+        stored_count=run.stored_count,
+        processed_count=run.processed_count,
+        skipped_count=run.skipped_count,
+        failed_count=run.failed_count,
+        error_message=run.error_message,
+        message="Enrichment collection completed.",
+    )
+
+
+def _get_source_status(db: Session, source_name: str) -> IntelSourceStatusOut:
+    status_by_name = {item.source_name: item for item in list_source_statuses(db)}
+    source_status = status_by_name.get(source_name)
+    if source_status is None:
+        raise HTTPException(status_code=404, detail="Intel source not found")
+    return source_status
 
 
 @router.delete(
