@@ -15,6 +15,7 @@ class ExposureRule(MatchRule):
                 status="not_applicable",
                 confidence=confidence,
                 reason="No public exposure requirement is defined for this vulnerability.",
+                reason_code="exposure.not_required",
                 evidence=[],
                 rule_name=self.rule_name,
             )
@@ -36,6 +37,7 @@ class ExposureRule(MatchRule):
                         "Vulnerability requires public access; matching local listening "
                         "service exists but public reachability was not observed."
                     ),
+                    reason_code="exposure.local_only",
                     evidence=[
                         {
                             "type": "listening_exposure",
@@ -69,6 +71,7 @@ class ExposureRule(MatchRule):
                 status="not_affected",
                 confidence=confidence,
                 reason="Vulnerability requires public access, but no matching public exposure was observed.",
+                reason_code="exposure.not_public",
                 evidence=[
                     {
                         "type": "public_exposure",
@@ -92,6 +95,7 @@ class ExposureRule(MatchRule):
             status="affected",
             confidence=confidence,
             reason="Vulnerability requires public access and the asset has matching public exposure.",
+            reason_code="exposure.public",
             evidence=[
                 {
                     "type": "public_exposure",

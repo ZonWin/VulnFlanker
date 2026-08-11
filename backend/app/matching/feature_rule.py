@@ -15,6 +15,7 @@ class FeatureRule(MatchRule):
                 status="not_applicable",
                 confidence=confidence,
                 reason="No module or feature condition is defined for this vulnerability.",
+                reason_code="feature.not_required",
                 evidence=[],
                 rule_name=self.rule_name,
             )
@@ -46,6 +47,7 @@ class FeatureRule(MatchRule):
                 status="affected",
                 confidence=confidence,
                 reason="Required module or feature was observed in asset evidence.",
+                reason_code="feature.observed",
                 evidence=[
                     {
                         "type": "feature_condition",
@@ -63,6 +65,7 @@ class FeatureRule(MatchRule):
             status="needs_review",
             confidence=confidence,
             reason="Vulnerability requires a module or feature that asset evidence cannot confirm.",
+            reason_code="feature.unconfirmed",
             evidence=[
                 {
                     "type": "feature_condition",

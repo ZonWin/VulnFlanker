@@ -32,6 +32,15 @@ from app.verification.package_version_check import build_package_absence_evidenc
 
 
 ALLOWED_AGENT_TASK_TYPES = {"package_version_check"}
+PROTECTED_VERIFICATION_PARAMETERS = {
+    "expected_product_identity",
+    "constraint_affected_versions",
+    "constraint_fixed_versions",
+    "constraint_version_scheme",
+    "source_authority",
+    "authority_score",
+    "scope_id",
+}
 RETRYABLE_TASK_STATUSES = {"failed", "rejected", "cancelled"}
 
 
@@ -394,10 +403,13 @@ def create_verification_task(
         db.commit()
         return None
 
-    parameters = {
-        **_default_parameters(match_result, payload.task_type),
-        **payload.parameters,
-    }
+    default_parameters = _default_parameters(match_result, payload.task_type)
+    parameters = {**default_parameters, **payload.parameters}
+    for key in PROTECTED_VERIFICATION_PARAMETERS:
+        if key in default_parameters:
+            parameters[key] = default_parameters[key]
+        else:
+            parameters.pop(key, None)
     task = VerificationTask(
         asset_id=match_result.asset_id,
         match_result_id=match_result.id,
@@ -567,14 +579,66 @@ def _default_parameters(match_result: MatchResult, task_type: str) -> dict[str, 
     package_name = _matched_component_name(match_result) or vulnerability.product
     if package_name:
         parameters["package_name"] = package_name
+        parameters["expected_product_identity"] = package_name
         component_type = _component_type_for_product(package_name)
         if component_type is None and vulnerability.product:
             component_type = _component_type_for_product(vulnerability.product)
         if component_type:
             parameters["component_type"] = component_type
-    if vulnerability.fixed_versions:
-        parameters["expected_version"] = vulnerability.fixed_versions
+    scope = _authoritative_scope_details(match_result)
+    affected_versions = (
+        scope.get("affected_versions") if scope else vulnerability.affected_versions
+    )
+    fixed_versions = scope.get("fixed_versions") if scope else vulnerability.fixed_versions
+    if scope:
+        parameters["constraint_affected_versions"] = affected_versions
+        parameters["constraint_fixed_versions"] = fixed_versions
+    elif affected_versions:
+        parameters["constraint_affected_versions"] = affected_versions
+    if not scope and fixed_versions:
+        parameters["constraint_fixed_versions"] = fixed_versions
+    if fixed_versions:
+        parameters["expected_version"] = fixed_versions
+    if scope:
+        field_mapping = {
+            "version_scheme": "constraint_version_scheme",
+            "source_authority": "source_authority",
+            "authority_score": "authority_score",
+            "scope_id": "scope_id",
+        }
+        for source_key, parameter_key in field_mapping.items():
+            value = scope.get(source_key)
+            if value is not None:
+                parameters[parameter_key] = value
     return parameters
+
+
+def _authoritative_scope_details(match_result: MatchResult) -> dict[str, object]:
+    candidates: list[dict[str, object]] = []
+    for evidence in match_result.evidence:
+        details = evidence.details_json or {}
+        scope = details.get("affected_scope")
+        if isinstance(scope, dict):
+            candidates.append(scope)
+    if not candidates:
+        return {}
+    return max(
+        candidates,
+        key=lambda scope: (
+            int(scope.get("authority_score") or 0),
+            sum(
+                bool(scope.get(field_name))
+                for field_name in (
+                    "distro",
+                    "distro_release",
+                    "source_package",
+                    "binary_package",
+                    "architecture",
+                    "flavor",
+                )
+            ),
+        ),
+    )
 
 
 def _matched_component_name(match_result: MatchResult) -> str | None:
@@ -626,6 +690,7 @@ def _build_evidence(
     task: VerificationTask,
     item: AgentTaskEvidenceIn,
 ) -> VerificationEvidence:
+    details = {**item.details, "evidence_origin": "agent"}
     return VerificationEvidence(
         verification_task_id=task.id,
         match_result_id=task.match_result_id,
@@ -633,7 +698,7 @@ def _build_evidence(
         summary=item.summary,
         raw_ref=item.raw_ref,
         confidence=item.confidence,
-        details_json=item.details,
+        details_json=details,
     )
 
 

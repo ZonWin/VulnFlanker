@@ -12,6 +12,7 @@ from app.matching.versioning import (
     VersionScheme,
     classify_version,
     compare_version_identities,
+    infer_observed_version_scheme,
     is_atomic_distro_or_commit_version,
 )
 
@@ -57,6 +58,7 @@ class VersionRule(MatchRule):
                 status="not_applicable",
                 confidence=confidence,
                 reason="Version rule was skipped because the product did not match the asset.",
+                reason_code="version.product_not_matched",
                 evidence=[],
                 rule_name=self.rule_name,
             )
@@ -77,6 +79,7 @@ class VersionRule(MatchRule):
                 status="needs_review",
                 confidence=confidence,
                 reason="No product-matched component has an observed version.",
+                reason_code="version.observed_version_missing",
                 evidence=[
                     {
                         "type": "package_version",
@@ -113,6 +116,7 @@ class VersionRule(MatchRule):
                         "Asset OS or kernel version is explicitly listed in the "
                         "affected version text."
                     ),
+                    reason_code="version.explicitly_listed",
                     evidence=[
                         _version_evidence(
                             {
@@ -143,6 +147,7 @@ class VersionRule(MatchRule):
                 status="needs_review",
                 confidence=confidence,
                 reason="Vulnerability has no machine-readable affected or fixed version range.",
+                reason_code="version.constraint_missing",
                 evidence=[
                     {
                         "type": "package_version",
@@ -202,6 +207,7 @@ class VersionRule(MatchRule):
                 status="affected",
                 confidence=confidence,
                 reason="At least one matched component version is inside the affected range.",
+                reason_code="version.affected_range",
                 evidence=evidence,
                 rule_name=self.rule_name,
             )
@@ -225,6 +231,7 @@ class VersionRule(MatchRule):
                 status="needs_review",
                 confidence=confidence,
                 reason="Version data exists, but at least one comparison was not reliable.",
+                reason_code="version.comparison_inconclusive",
                 evidence=evidence,
                 rule_name=self.rule_name,
             )
@@ -242,6 +249,7 @@ class VersionRule(MatchRule):
             status="not_affected",
             confidence=confidence,
             reason="All matched component versions are outside the affected range.",
+            reason_code="version.safe_range",
             evidence=evidence,
             rule_name=self.rule_name,
         )
@@ -256,6 +264,8 @@ def _version_evidence(item: dict[str, Any], summary: str, confidence: float) -> 
         summary = f"{summary} Reason: {comparison_reason}"
     if constraint_summary:
         summary = f"{summary} Constraint source: {constraint_summary}"
+    comparisons = item.get("comparisons", [])
+    first_comparison = comparisons[0] if comparisons else {}
     return {
         "type": _version_evidence_type(candidate),
         "summary": f"{summary} {label}={item['version']}.",
@@ -272,7 +282,11 @@ def _version_evidence(item: dict[str, Any], summary: str, confidence: float) -> 
             "constraint_groups": item.get("constraint_groups", []),
             "constraint_summary": constraint_summary,
             "comparison_reason": comparison_reason,
-            "comparisons": item.get("comparisons", []),
+            "comparisons": comparisons,
+            "observed_scheme": first_comparison.get("observed_scheme"),
+            "constraint_scheme": first_comparison.get("constraint_scheme"),
+            "comparator": first_comparison.get("comparator"),
+            "comparison_reason_code": first_comparison.get("reason_code"),
         },
     }
 
@@ -601,21 +615,14 @@ def _version_evidence_type(candidate: dict[str, Any]) -> str:
 
 
 def _candidate_version_scheme(candidate: dict[str, Any]) -> VersionScheme:
-    explicit = candidate.get("version_scheme")
-    version = str(candidate.get("version") or "")
-    source_type = str(candidate.get("source_type") or "").lower()
-    component_type = str(candidate.get("component_type") or "").lower()
-    if explicit:
-        return classify_version(version, hint=str(explicit))
-    if source_type in {"apt", "dpkg", "dpkg-query", "debian"}:
-        return VersionScheme.DEBIAN
-    if source_type in {"rpm", "dnf", "yum"}:
-        return VersionScheme.RPM
-    if component_type == "kernel":
-        detected = classify_version(version)
-        if detected == VersionScheme.UBUNTU_KERNEL:
-            return detected
-    return classify_version(version)
+    return infer_observed_version_scheme(
+        str(candidate.get("version") or ""),
+        explicit=candidate.get("version_scheme"),
+        ecosystem=candidate.get("ecosystem"),
+        source_type=candidate.get("source_type"),
+        component_type=candidate.get("component_type"),
+        distro=candidate.get("distro"),
+    )
 
 
 def _affected_text_mentions_candidate_version(

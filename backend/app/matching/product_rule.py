@@ -17,6 +17,7 @@ class ProductRule(MatchRule):
                 status="needs_review",
                 confidence=confidence,
                 reason="Vulnerability has no normalized product field.",
+                reason_code="product.missing",
                 evidence=[
                     {
                         "type": "product_unavailable",
@@ -34,6 +35,7 @@ class ProductRule(MatchRule):
                 status="not_affected",
                 confidence=confidence,
                 reason=f"No asset component or exposure matched product {product}.",
+                reason_code="product.no_match",
                 evidence=[
                     {
                         "type": "product_no_match",
@@ -58,6 +60,7 @@ class ProductRule(MatchRule):
                     f"Only weak contextual evidence matched product {product}; "
                     "a product identity match is still required."
                 ),
+                reason_code="product.weak_candidate",
                 evidence=[
                     _candidate_evidence(
                         candidate,
@@ -86,6 +89,7 @@ class ProductRule(MatchRule):
             status="affected",
             confidence=confidence,
             reason=f"Asset has observed evidence for product {product}.",
+            reason_code="product.matched",
             evidence=evidence,
             rule_name=self.rule_name,
         )

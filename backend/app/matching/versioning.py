@@ -81,6 +81,37 @@ def classify_version(
     return VersionScheme.OPAQUE
 
 
+def infer_observed_version_scheme(
+    value: str,
+    *,
+    explicit: VersionScheme | str | None = None,
+    ecosystem: str | None = None,
+    source_type: str | None = None,
+    component_type: str | None = None,
+    distro: str | None = None,
+) -> VersionScheme:
+    if explicit:
+        return classify_version(value, hint=explicit)
+    source_key = str(source_type or "").strip().lower()
+    ecosystem_key = str(ecosystem or "").strip().lower()
+    component_key = str(component_type or "").strip().lower()
+    distro_key = str(distro or "").strip().lower()
+    if component_key == "kernel":
+        detected = classify_version(value)
+        if distro_key == "ubuntu" or detected == VersionScheme.UBUNTU_KERNEL:
+            return VersionScheme.UBUNTU_KERNEL
+    if ecosystem_key in {"deb", "debian"} or source_key in {
+        "apt",
+        "dpkg",
+        "dpkg-query",
+        "debian",
+    }:
+        return VersionScheme.DEBIAN
+    if ecosystem_key == "rpm" or source_key in {"rpm", "dnf", "yum"}:
+        return VersionScheme.RPM
+    return classify_version(value)
+
+
 def is_atomic_distro_or_commit_version(value: str) -> bool:
     scheme = classify_version(value)
     return scheme in {
@@ -295,7 +326,16 @@ def _debian_char_order(value: str) -> int:
 def _compare_ubuntu_kernel_versions(left: str, right: str) -> VersionComparison:
     left_parts = _parse_ubuntu_kernel(left)
     right_parts = _parse_ubuntu_kernel(right)
-    assert left_parts is not None and right_parts is not None
+    if left_parts is None or right_parts is None:
+        return _uncomparable(
+            VersionScheme.UBUNTU_KERNEL,
+            VersionScheme.UBUNTU_KERNEL,
+            "One side is not a valid Ubuntu kernel ABI version.",
+            "version.ubuntu_kernel.invalid",
+            left,
+            right,
+            comparator="ubuntu_kernel_abi",
+        )
     left_base, left_abi, left_upload, _left_flavor = left_parts
     right_base, right_abi, right_upload, _right_flavor = right_parts
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.matching.product_aliases import product_aliases
-from app.matching.utils import normalize_name, values_match
+from app.matching.utils import name_tokens, normalize_name
 from app.matching.version_rule import evaluate_version_constraint_groups, parse_constraint_groups
+from app.matching.versioning import infer_observed_version_scheme
 
 
 TASK_TYPE = "package_version_check"
@@ -28,6 +29,8 @@ class PackageVersionDecision:
     match_status: str | None
     confidence: float | None
     reason: str | None
+    reason_code: str
+    details: dict[str, object] = field(default_factory=dict)
 
 
 def execute_package_version_check(
@@ -59,7 +62,13 @@ def execute_package_version_check(
             )
         return PackageVersionExecution(
             status="completed",
-            evidence=[build_package_absence_evidence(package_name)],
+            evidence=[
+                build_package_absence_evidence(
+                    package_name,
+                    evidence_origin="local_worker",
+                    inventory_complete=True,
+                )
+            ],
         )
 
     component_name = _string_value(_component_value(component, "component_name")) or package_name
@@ -83,6 +92,14 @@ def execute_package_version_check(
                     "component_type": observed_component_type,
                     "observed_version": observed_version,
                     "source": source,
+                    "ecosystem": _component_value(component, "ecosystem"),
+                    "distro": _component_value(component, "distro"),
+                    "distro_release": _component_value(component, "distro_release"),
+                    "source_package": _component_value(component, "source_package"),
+                    "binary_package": _component_value(component, "binary_package"),
+                    "architecture": _component_value(component, "architecture"),
+                    "flavor": _component_value(component, "flavor"),
+                    "version_scheme": _component_value(component, "version_scheme"),
                 },
             }
         ],
@@ -96,6 +113,10 @@ def decide_package_version_match_update(
     evidence_items: list[Any],
     affected_versions: str | None,
     fixed_versions: str | None,
+    expected_package_name: str | None = None,
+    constraint_version_scheme: str | None = None,
+    source_authority: str | None = None,
+    authority_score: int | None = None,
 ) -> PackageVersionDecision:
     if task_status != "completed":
         if error_code:
@@ -103,11 +124,15 @@ def decide_package_version_match_update(
                 match_status=None,
                 confidence=None,
                 reason=f"Verification did not complete: {error_code}.",
+                reason_code="verification.task_incomplete",
+                details={"error_code": error_code},
             )
         return PackageVersionDecision(
             match_status=None,
             confidence=None,
             reason=f"Verification ended with status {task_status}.",
+            reason_code="verification.task_not_completed",
+            details={"task_status": task_status},
         )
 
     absence_evidence = _first_absence_evidence(evidence_items)
@@ -119,10 +144,42 @@ def decide_package_version_match_update(
             or "component"
         )
         confidence = _confidence_value(_evidence_value(absence_evidence, "confidence"))
+        evidence_origin = _string_value(details.get("evidence_origin"))
+        inventory_complete = details.get("inventory_complete") is True
+        identity_matches = _package_identity_matches(
+            expected_package_name,
+            package_name,
+        )
+        decision_details = {
+            "expected_package_name": expected_package_name,
+            "observed_package_name": package_name,
+            "evidence_origin": evidence_origin,
+            "inventory_complete": inventory_complete,
+            "identity_matches": identity_matches,
+            "source_authority": source_authority,
+            "authority_score": authority_score,
+        }
+        if not (
+            evidence_origin == "local_worker"
+            and inventory_complete
+            and identity_matches
+        ):
+            return PackageVersionDecision(
+                match_status="needs_review",
+                confidence=min(confidence, 0.6),
+                reason=(
+                    f"Verification did not find {package_name}, but the absence "
+                    "evidence cannot prove the expected product is absent."
+                ),
+                reason_code="verification.package_absence_inconclusive",
+                details=decision_details,
+            )
         return PackageVersionDecision(
             match_status="not_affected",
             confidence=confidence,
             reason=f"Verification confirmed {package_name} is not installed on the asset.",
+            reason_code="verification.package_absent",
+            details=decision_details,
         )
 
     evidence = _first_version_evidence(evidence_items)
@@ -131,6 +188,7 @@ def decide_package_version_match_update(
             match_status=None,
             confidence=None,
             reason="Verification completed without version evidence.",
+            reason_code="verification.version_evidence_missing",
         )
 
     details = _evidence_value(evidence, "details_json") or {}
@@ -145,12 +203,36 @@ def decide_package_version_match_update(
     )
     observed_version = _string_value(details.get("observed_version"))
     confidence = _confidence_value(_evidence_value(evidence, "confidence"))
+    identity_matches = _package_identity_matches(expected_package_name, package_name)
+    base_details: dict[str, object] = {
+        "expected_package_name": expected_package_name,
+        "observed_package_name": package_name,
+        "identity_matches": identity_matches,
+        "observed_version": observed_version,
+        "constraint_version_scheme": constraint_version_scheme,
+        "source_authority": source_authority,
+        "authority_score": authority_score,
+    }
+
+    if not identity_matches:
+        return PackageVersionDecision(
+            match_status="needs_review",
+            confidence=min(confidence, 0.6),
+            reason=(
+                f"Verification reported {package_name}, which does not match "
+                f"the expected product identity {expected_package_name}."
+            ),
+            reason_code="verification.product_identity_mismatch",
+            details=base_details,
+        )
 
     if not observed_version:
         return PackageVersionDecision(
             match_status="needs_review",
             confidence=confidence,
             reason=f"Verification observed {package_name}, but no version was returned.",
+            reason_code="verification.version_missing",
+            details=base_details,
         )
 
     constraint_groups = parse_constraint_groups(affected_versions, fixed_versions)
@@ -167,6 +249,8 @@ def decide_package_version_match_update(
                     f"Verification confirmed {package_name} {observed_version} "
                     "is listed in the affected version text."
                 ),
+                reason_code="verification.affected_version_listed",
+                details=base_details,
             )
         return PackageVersionDecision(
             match_status="needs_review",
@@ -175,13 +259,35 @@ def decide_package_version_match_update(
                 f"Verification observed {package_name} {observed_version}, "
                 "but no version constraint was available."
             ),
+            reason_code="verification.constraint_missing",
+            details=base_details,
         )
+
+    for group in constraint_groups:
+        for constraint in group:
+            if constraint_version_scheme:
+                constraint.version_scheme = constraint_version_scheme
+
+    observed_scheme = infer_observed_version_scheme(
+        observed_version,
+        explicit=_string_value(details.get("version_scheme")) or None,
+        ecosystem=_string_value(details.get("ecosystem")) or None,
+        source_type=_string_value(details.get("source")) or None,
+        component_type=component_type,
+        distro=_string_value(details.get("distro")) or None,
+    )
 
     evaluation = evaluate_version_constraint_groups(
         observed_version,
         constraint_groups,
-        allow_metadata_mismatch=component_type in PLATFORM_COMPONENT_TYPES,
+        observed_scheme=observed_scheme,
     )
+    evaluation_details = {
+        **base_details,
+        "observed_scheme": observed_scheme.value,
+        "comparison_reason": evaluation.reason,
+        "comparisons": evaluation.comparisons or [],
+    }
     if evaluation.result is True:
         return PackageVersionDecision(
             match_status="verified",
@@ -190,6 +296,8 @@ def decide_package_version_match_update(
                 f"Verification confirmed {package_name} {observed_version} "
                 "is inside the affected range."
             ),
+            reason_code="verification.version_affected",
+            details=evaluation_details,
         )
     if evaluation.result is False:
         return PackageVersionDecision(
@@ -199,6 +307,8 @@ def decide_package_version_match_update(
                 f"Verification confirmed {package_name} {observed_version} "
                 "is outside the affected range."
             ),
+            reason_code="verification.version_not_affected",
+            details=evaluation_details,
         )
     return PackageVersionDecision(
         match_status="needs_review",
@@ -207,6 +317,8 @@ def decide_package_version_match_update(
             f"Verification observed {package_name} {observed_version}, "
             f"but version comparison was inconclusive: {evaluation.reason}."
         ),
+        reason_code="verification.version_inconclusive",
+        details=evaluation_details,
     )
 
 
@@ -219,14 +331,13 @@ def _find_component(
     for component in asset_components:
         if component_type and _component_type(component) != component_type:
             continue
-        if values_match(
-            package_name,
-            (
+        if any(
+            _package_identity_matches(package_name, observed_name)
+            for observed_name in (
                 _component_value(component, "component_name"),
-                _component_value(component, "component_type"),
-                _component_value(component, "source_type"),
-                _component_value(component, "install_path"),
-            ),
+                _component_value(component, "source_package"),
+                _component_value(component, "binary_package"),
+            )
         ):
             return component
     return None
@@ -251,6 +362,8 @@ def build_package_absence_evidence(
     *,
     source: str = "asset_component_inventory",
     confidence: float = 0.95,
+    evidence_origin: str = "unknown",
+    inventory_complete: bool = False,
 ) -> dict[str, object]:
     return {
         "evidence_type": ABSENCE_EVIDENCE_TYPE,
@@ -262,8 +375,25 @@ def build_package_absence_evidence(
             "component_type": "package",
             "observed": False,
             "source": source,
+            "evidence_origin": evidence_origin,
+            "inventory_complete": inventory_complete,
         },
     }
+
+
+def _package_identity_matches(expected: str | None, observed: object) -> bool:
+    expected_key = normalize_name(expected)
+    observed_text = _string_value(observed)
+    observed_key = normalize_name(observed_text)
+    if not expected_key or not observed_key:
+        return False
+    if expected_key == observed_key:
+        return True
+    alias_keys = {normalize_name(alias) for alias in product_aliases(expected)}
+    if observed_key in alias_keys:
+        return True
+    observed_tokens = name_tokens(observed_text)
+    return bool(observed_tokens and normalize_name(observed_tokens[0]) in alias_keys)
 
 
 def _evidence_value(evidence: Any, field_name: str) -> Any:

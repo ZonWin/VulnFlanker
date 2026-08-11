@@ -442,7 +442,12 @@ def _aggregate_scope_pipeline_results(
             evidence.append(
                 {
                     **item,
-                    "details": {**(item.get("details") or {}), "affected_scope": scope_summary},
+                    "details": {
+                        **(item.get("details") or {}),
+                        "source_authority": scope.source_authority,
+                        "authority_score": scope.authority_score,
+                        "affected_scope": scope_summary,
+                    },
                 }
             )
         for item in result.rule_trace:
@@ -472,8 +477,27 @@ def _aggregate_scope_pipeline_results(
         rule_version="match-scope-pipeline-v1",
         evidence=evidence,
         rule_results=rule_results,
-        rule_trace=rule_trace,
+        rule_trace=_deduplicate_scope_rule_trace(rule_trace),
     )
+
+
+def _deduplicate_scope_rule_trace(rule_trace: list[dict]) -> list[dict]:
+    consolidated: dict[tuple[object, ...], dict] = {}
+    for item in rule_trace:
+        key = (
+            item.get("rule_name"),
+            item.get("status"),
+            item.get("reason_code"),
+        )
+        existing = consolidated.get(key)
+        scope = item.get("affected_scope") or {}
+        scope_id = scope.get("scope_id") if isinstance(scope, dict) else None
+        if existing is None:
+            existing = {**item, "affected_scope_ids": []}
+            consolidated[key] = existing
+        if scope_id and scope_id not in existing["affected_scope_ids"]:
+            existing["affected_scope_ids"].append(scope_id)
+    return list(consolidated.values())
 
 
 def _evaluate_affected_scope(

@@ -29,6 +29,17 @@ def apply_verification_result_to_match_result(
     previous_confidence = match_result.confidence
     previous_risk_score = match_result.risk_score
     decision = _decision_for_task(task, match_result)
+    if (
+        _has_authoritative_not_affected_status(match_result)
+        and decision.match_status not in {None, "not_affected"}
+    ):
+        decision.match_status = None
+        decision.reason = (
+            "Verification evidence was recorded but cannot override an applicable "
+            "distribution not-affected status."
+        )
+        decision.reason_code = "verification.distribution_status_preserved"
+    _annotate_verification_evidence(task, decision)
     if decision.match_status is not None:
         match_result.status = decision.match_status
     if decision.confidence is not None:
@@ -61,6 +72,7 @@ def apply_verification_result_to_match_result(
             "previous_risk_score": previous_risk_score,
             "new_risk_score": match_result.risk_score,
             "reason": decision.reason,
+            "reason_code": decision.reason_code,
         },
     )
 
@@ -175,13 +187,32 @@ def run_local_verification_task(
 
 
 def _decision_for_task(task: VerificationTask, match_result: MatchResult):
+    parameters = task.parameters or {}
     if task.task_type == PACKAGE_VERSION_CHECK:
         return decide_package_version_match_update(
             task_status=task.status,
             error_code=task.error_code,
             evidence_items=list(task.evidence),
-            affected_versions=match_result.vulnerability.affected_versions,
-            fixed_versions=match_result.vulnerability.fixed_versions,
+            affected_versions=_parameter_or_default(
+                parameters,
+                "constraint_affected_versions",
+                match_result.vulnerability.affected_versions,
+            ),
+            fixed_versions=_parameter_or_default(
+                parameters,
+                "constraint_fixed_versions",
+                match_result.vulnerability.fixed_versions,
+            ),
+            expected_package_name=_parameter_text(
+                parameters,
+                "expected_product_identity",
+            ),
+            constraint_version_scheme=_parameter_text(
+                parameters,
+                "constraint_version_scheme",
+            ),
+            source_authority=_parameter_text(parameters, "source_authority"),
+            authority_score=_parameter_int(parameters, "authority_score"),
         )
     return decide_package_version_match_update(
         task_status="rejected",
@@ -189,6 +220,7 @@ def _decision_for_task(task: VerificationTask, match_result: MatchResult):
         evidence_items=[],
         affected_versions=None,
         fixed_versions=None,
+        expected_package_name=None,
     )
 
 
@@ -199,6 +231,7 @@ def _load_match_result(db: Session, match_result_id: str) -> MatchResult | None:
             selectinload(MatchResult.asset).selectinload(Asset.exposures),
             selectinload(MatchResult.verification_tasks),
             selectinload(MatchResult.vulnerability),
+            selectinload(MatchResult.evidence),
         )
         .where(MatchResult.id == match_result_id)
     )
@@ -208,6 +241,7 @@ def _build_evidence(
     task: VerificationTask,
     item: dict[str, object],
 ) -> VerificationEvidence:
+    details = {**dict(item.get("details") or {}), "evidence_origin": "local_worker"}
     return VerificationEvidence(
         verification_task_id=task.id,
         match_result_id=task.match_result_id,
@@ -215,7 +249,7 @@ def _build_evidence(
         summary=str(item.get("summary") or ""),
         raw_ref=item.get("raw_ref"),
         confidence=float(item.get("confidence") or 0.0),
-        details_json=dict(item.get("details") or {}),
+        details_json=details,
     )
 
 
@@ -230,6 +264,11 @@ def _asset_platform_components(asset: Asset) -> list[dict[str, object]]:
                 "component_type": "operating_system",
                 "version": asset.os_version,
                 "source_type": "os-release",
+                "ecosystem": "deb" if str(asset.os_family or "").lower() in {"ubuntu", "debian"} else None,
+                "distro": str(asset.os_family or "").lower() or None,
+                "distro_release": asset.os_version,
+                "architecture": asset.architecture,
+                "version_scheme": "generic",
                 "install_path": " ".join(
                     str(value)
                     for value in (asset.os_family, asset.os_version)
@@ -246,6 +285,16 @@ def _asset_platform_components(asset: Asset) -> list[dict[str, object]]:
                 "component_type": "kernel",
                 "version": asset.kernel_version,
                 "source_type": "uname",
+                "ecosystem": "deb" if str(asset.os_family or "").lower() in {"ubuntu", "debian"} else None,
+                "distro": str(asset.os_family or "").lower() or None,
+                "distro_release": asset.os_version,
+                "source_package": "linux" if str(asset.os_family or "").lower() in {"ubuntu", "debian"} else "kernel",
+                "architecture": asset.architecture,
+                "version_scheme": (
+                    "ubuntu_kernel"
+                    if str(asset.os_family or "").lower() == "ubuntu"
+                    else "generic"
+                ),
                 "install_path": " ".join(
                     str(value)
                     for value in (asset.platform, asset.kernel_version)
@@ -261,3 +310,65 @@ def _merge_verification_reason(current_reason: str | None, verification_reason: 
     if not current_reason:
         return verification_reason
     return f"{current_reason} | Verification: {verification_reason}"
+
+
+def _annotate_verification_evidence(task: VerificationTask, decision) -> None:
+    for evidence in task.evidence:
+        if evidence.evidence_type not in {
+            "package_version",
+            "kernel_version",
+            "os_version",
+            "package_absence",
+        }:
+            continue
+        evidence.details_json = {
+            **(evidence.details_json or {}),
+            "decision_status": decision.match_status,
+            "decision_reason_code": decision.reason_code,
+            "server_evaluation": decision.details,
+        }
+
+
+def _has_authoritative_not_affected_status(match_result: MatchResult) -> bool:
+    if match_result.status != "not_affected":
+        return False
+    for evidence in match_result.evidence:
+        if evidence.evidence_type != "distro_status":
+            continue
+        details = evidence.details_json or {}
+        if (
+            details.get("declared_status") in {"not_affected", "package_not_present"}
+            and details.get("authority") == "distribution"
+        ):
+            return True
+    return False
+
+
+def _parameter_or_default(
+    parameters: dict,
+    key: str,
+    default: str | None,
+) -> str | None:
+    if key not in parameters:
+        return default
+    value = parameters.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parameter_text(parameters: dict, key: str) -> str | None:
+    value = parameters.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parameter_int(parameters: dict, key: str) -> int | None:
+    value = parameters.get(key)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None

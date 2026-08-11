@@ -15,6 +15,7 @@ class OperatingSystemRule(MatchRule):
                 status="not_applicable",
                 confidence=confidence,
                 reason="No operating system restriction is defined for this vulnerability.",
+                reason_code="os.not_restricted",
                 evidence=[],
                 rule_name=self.rule_name,
             )
@@ -42,6 +43,7 @@ class OperatingSystemRule(MatchRule):
                 status="affected",
                 confidence=confidence,
                 reason="Asset operating system matches the vulnerability restriction.",
+                reason_code="os.matched",
                 evidence=[
                     {
                         "type": "os_condition",
@@ -61,6 +63,7 @@ class OperatingSystemRule(MatchRule):
             status="not_affected",
             confidence=confidence,
             reason="Asset operating system does not match the vulnerability restriction.",
+            reason_code="os.not_matched",
             evidence=[
                 {
                     "type": "os_condition",

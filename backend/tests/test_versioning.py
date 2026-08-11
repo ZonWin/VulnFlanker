@@ -79,6 +79,18 @@ def test_equal_kernel_abi_without_upload_revision_is_inconclusive() -> None:
     assert comparison.reason_code == "version.ubuntu_kernel.upload_missing"
 
 
+def test_invalid_explicit_kernel_scheme_is_inconclusive_instead_of_crashing() -> None:
+    comparison = compare_version_identities(
+        "5.15.0-119-generic",
+        "6.0",
+        left_scheme=VersionScheme.UBUNTU_KERNEL,
+        right_scheme=VersionScheme.UBUNTU_KERNEL,
+    )
+
+    assert comparison.result is None
+    assert comparison.reason_code == "version.ubuntu_kernel.invalid"
+
+
 def test_ubuntu_hyphen_version_is_an_exact_version_not_a_range() -> None:
     groups = parse_constraint_groups("5.8.0-50.56", None)
 

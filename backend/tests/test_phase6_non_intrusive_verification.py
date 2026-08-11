@@ -227,7 +227,7 @@ def test_phase6_verification_defaults_to_matched_component_name(
     assert create_response.json()["parameters"]["package_name"] == "inetutils-telnet"
 
 
-def test_phase6_worker_marks_absent_package_not_affected(
+def test_phase6_worker_rejects_unrelated_package_absence(
     client,
     db_session,
 ) -> None:
@@ -271,8 +271,52 @@ def test_phase6_worker_marks_absent_package_not_affected(
 
     match_result = db_session.get(MatchResult, match_result_id)
     assert match_result is not None
+    assert match_result.status == "needs_review"
+    assert evidence.details_json["decision_reason_code"] == (
+        "verification.package_absence_inconclusive"
+    )
+    assert evidence.details_json["server_evaluation"]["identity_matches"] is False
+
+
+def test_phase6_complete_inventory_can_confirm_expected_package_absence(
+    client,
+    db_session,
+) -> None:
+    match_result_id = _create_affected_match_result(
+        client,
+        db_session,
+        canonical_id="CVE-2026-8608",
+    )
+    match_result = db_session.get(MatchResult, match_result_id)
+    assert match_result is not None
+    nginx_component = db_session.scalar(
+        select(AssetComponent).where(
+            AssetComponent.asset_id == match_result.asset_id,
+            AssetComponent.component_name == "nginx",
+        )
+    )
+    assert nginx_component is not None
+    db_session.delete(nginx_component)
+    db_session.commit()
+
+    create_response = client.post(
+        "/api/v1/verification-tasks",
+        json={"match_result_id": match_result_id, "requested_by": "worker-test"},
+    )
+    task_id = create_response.json()["id"]
+    db_session.expire_all()
+
+    run_local_verification_task(db_session, task_id)
+
+    db_session.refresh(match_result)
     assert match_result.status == "not_affected"
-    assert match_result.risk_score == 0.0
+    evidence = db_session.scalar(
+        select(VerificationEvidence).where(
+            VerificationEvidence.verification_task_id == task_id
+        )
+    )
+    assert evidence is not None
+    assert evidence.details_json["decision_reason_code"] == "verification.package_absent"
 
 
 def test_phase6_worker_executes_local_kernel_version_check(
@@ -361,7 +405,7 @@ def test_phase6_worker_executes_local_os_version_text_check(
     )
     assert create_response.status_code == 201
     task_payload = create_response.json()
-    assert task_payload["parameters"]["package_name"] == "Ubuntu"
+    assert task_payload["parameters"]["package_name"] == "ubuntu"
     assert task_payload["parameters"]["component_type"] == "operating_system"
 
     result = run_local_verification_task(db_session, task_payload["id"])

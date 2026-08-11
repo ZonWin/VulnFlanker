@@ -8,6 +8,7 @@ from app.db.models import (
     Vulnerability,
     VulnerabilityAffectedScope,
     VulnerabilitySource,
+    VerificationEvidence,
 )
 from app.matching.scope_resolver import resolve_affected_scopes
 from app.services.matching import evaluate_asset_vulnerability
@@ -246,7 +247,7 @@ def test_manual_ubuntu_security_sync_endpoint(
     }
 
 
-def test_jammy_not_affected_overrides_generic_upstream_range(db_session) -> None:
+def test_jammy_not_affected_overrides_generic_upstream_range(client, db_session) -> None:
     asset = _database_asset(db_session)
     vulnerability = _vulnerability(db_session, "CVE-2026-12347")
     db_session.add_all(
@@ -288,6 +289,56 @@ def test_jammy_not_affected_overrides_generic_upstream_range(db_session) -> None
         "distro_status",
         "scope_resolution",
     }
+
+    task_response = client.post(
+        "/api/v1/verification-tasks",
+        json={
+            "match_result_id": result.id,
+            "parameters": {
+                "constraint_affected_versions": "< 99.0",
+                "source_authority": "untrusted-override",
+            },
+        },
+    )
+    assert task_response.status_code == 201
+    task_payload = task_response.json()
+    assert task_payload["parameters"]["source_authority"] == "distribution"
+    assert task_payload["parameters"].get("constraint_affected_versions") is None
+
+    poll_response = client.get("/api/v1/agents/agent-jammy-kernel/tasks/next")
+    assert poll_response.status_code == 200
+    result_response = client.post(
+        f"/api/v1/agents/agent-jammy-kernel/tasks/{task_payload['id']}/results",
+        json={
+            "status": "completed",
+            "evidence": [
+                {
+                    "evidence_type": "kernel_version",
+                    "summary": "Agent reported an older kernel.",
+                    "confidence": 0.99,
+                    "details": {
+                        "package_name": "Linux Kernel",
+                        "component_type": "kernel",
+                        "observed_version": "5.15.0-90-generic",
+                        "distro": "ubuntu",
+                        "source": "uname",
+                    },
+                }
+            ],
+        },
+    )
+    assert result_response.status_code == 202
+    db_session.refresh(result)
+    assert result.status == "not_affected"
+    verification = db_session.scalar(
+        select(VerificationEvidence).where(
+            VerificationEvidence.verification_task_id == task_payload["id"]
+        )
+    )
+    assert verification is not None
+    assert verification.details_json["decision_reason_code"] == (
+        "verification.distribution_status_preserved"
+    )
 
 
 def test_released_jammy_fix_uses_kernel_abi_boundary(db_session) -> None:

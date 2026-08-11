@@ -154,8 +154,11 @@ def test_legacy_agent_package_not_found_result_is_completed_absence(
 
     match_result = db_session.get(MatchResult, match_result_id)
     assert match_result is not None
-    assert match_result.status == "not_affected"
-    assert match_result.risk_score == 0.0
+    assert match_result.status == "needs_review"
+    assert evidence.details_json["evidence_origin"] == "agent"
+    assert evidence.details_json["decision_reason_code"] == (
+        "verification.package_absence_inconclusive"
+    )
 
 
 def test_unknown_agent_task_type_is_rejected(client, db_session) -> None:
