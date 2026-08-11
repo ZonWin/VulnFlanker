@@ -6,7 +6,7 @@ VulnFlanker 是一个面向内部安全运营的漏洞影响评估与受控验�
 
 项目旨在实现"自动采集威胁情报 —— 自动完成资产更新 —— 自动完成漏洞比对 —— 自动完成风险评估"。自建**权重可调**的风险匹配流水线，以满足企业实际管理需求。
 
-本项目另一优化点在于加入了两组AI补全机制，在获取的威胁情报质量不佳时，允许通过**AI大模型提取漏洞信息**（支持OpenAI格式API对接）、允许**AI大模型联网搜索补充漏洞信息**（目前仅完成KIMI API的对接优化），尽可能减少人工维护漏洞库的步骤，提高漏洞评估效率。当然，如果有**标准化的漏洞数据源**再好不过，项目默认使用CISA漏洞库作为威胁信息采集源，后续将逐步新增采集器。
+本项目另一优化点在于加入了两组AI补全机制，在获取的威胁情报质量不佳时，允许通过**AI大模型提取漏洞信息**（支持OpenAI格式API对接）、允许**AI大模型联网搜索补充漏洞信息**（目前仅完成KIMI API的对接优化），尽可能减少人工维护漏洞库的步骤。平台同时通过独立采集器持续接入 CISA KEV、CVE List V5、NVD、Canonical Ubuntu、Debian Security Tracker 和 Red Hat CSAF：CISA 负责已利用优先级，其余官方来源补全通用漏洞和发行版包状态。
 
 **【如有需求或意见可提issue，作者将尽快响应，谢谢。】**
 
@@ -24,7 +24,7 @@ VulnFlanker 是一个面向内部安全运营的漏洞影响评估与受控验�
 
 ## 功能
 
-- 从 CISA KEV、阿里云 AVD 和内置 WatchVuln 采集器收集并标准化漏洞情报。
+- 从 CISA KEV、CVE List V5、NVD、Canonical Ubuntu、Debian Security Tracker、Red Hat CSAF、阿里云 AVD 和内置 WatchVuln 独立采集并标准化漏洞情报；支持来源级启停、调度、generation 原子激活、freshness 和定向重评。
     - WatchVuln 高价值漏洞采集与推送 https://github.com/zema1/watchvuln
     - WatchVuln 项目功能非常好用，初期有考虑以此作为采集器，但本项目中使用标准化格式数据源较佳，还是感谢原作者。
 - 通过 Agent 接入 API 接收 Linux 主机快照。

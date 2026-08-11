@@ -18,8 +18,15 @@ the repository.
 | cryptography | 48.0.0 | Apache-2.0 OR BSD-3-Clause |
 | celery | 5.6.3 | BSD-3-Clause |
 | redis-py | 5.3.1 | MIT |
+| zstandard | 0.25.0 | BSD-3-Clause |
 
 Development and test dependencies include `httpx` and `pytest`.
+
+## External Security Data Attribution
+
+Red Hat CSAF/VEX security data is provided by Red Hat, Inc. and used under the
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+license. The original data entry point is <https://access.redhat.com/security/data>.
 
 ## Frontend Runtime Dependencies
 

@@ -20,8 +20,10 @@ supplement vulnerability information**. At present, only the KIMI API
 integration has been optimized for web enrichment. The goal is to reduce manual
 vulnerability database maintenance and improve vulnerability assessment
 efficiency. **Standardized vulnerability data sources** are still preferred
-where available. The project uses the CISA vulnerability catalog as the default
-threat intelligence source, and more collectors will be added gradually.
+where available. Independent collectors continuously ingest CISA KEV, CVE List
+V5, NVD, Canonical Ubuntu, Debian Security Tracker, and Red Hat CSAF. CISA
+remains the exploited-vulnerability priority signal, while the other official
+sources enrich generic CVE and distribution package status.
 
 **If you have needs or feedback, please open an issue; the author will respond
 as soon as possible. Thank you.**
@@ -43,8 +45,10 @@ production deployments.
 
 ## What It Does
 
-- Collects and normalizes vulnerability intelligence from CISA KEV, Aliyun AVD,
-  and the built-in WatchVuln collector.
+- Independently collects and normalizes vulnerability intelligence from CISA
+  KEV, CVE List V5, NVD, Canonical Ubuntu, Debian Security Tracker, Red Hat
+  CSAF, Aliyun AVD, and the built-in WatchVuln collector, with per-source
+  scheduling, atomic generations, freshness, and targeted reevaluation.
   - WatchVuln high-value vulnerability collection and push:
     `https://github.com/zema1/watchvuln`
   - WatchVuln is very useful. It was initially considered as a collector, but

@@ -15,8 +15,13 @@ VulnFlanker 依赖第三方开源软件。本文档汇总公开 `v0.9.0-prep` �
 | cryptography | 48.0.0 | Apache-2.0 OR BSD-3-Clause |
 | celery | 5.6.3 | BSD-3-Clause |
 | redis-py | 5.3.1 | MIT |
+| zstandard | 0.25.0 | BSD-3-Clause |
 
 开发和测试依赖包括 `httpx` 和 `pytest`。
+
+## 外部安全数据归属
+
+Red Hat CSAF/VEX 安全数据由 Red Hat, Inc. 提供，并按 [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/) 许可使用。原始数据入口为 <https://access.redhat.com/security/data>。
 
 ## 前端运行时依赖
 

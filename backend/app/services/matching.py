@@ -732,6 +732,7 @@ def _no_applicable_scope_result(resolution: ScopeResolution) -> PipelineResult:
 def _scope_summary(scope: VulnerabilityAffectedScope) -> dict[str, object]:
     return {
         "scope_id": scope.id,
+        "source_name": scope.source_name,
         "vendor": scope.vendor,
         "product": scope.product,
         "ecosystem": scope.ecosystem,
