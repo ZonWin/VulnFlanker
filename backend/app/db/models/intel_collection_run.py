@@ -26,4 +26,13 @@ class IntelCollectionRun(TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     parameters_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    generation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    update_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cursor_before_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    cursor_after_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    completeness_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifacts_count: Mapped[int] = mapped_column(Integer, default=0)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

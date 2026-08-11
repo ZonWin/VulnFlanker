@@ -14,8 +14,10 @@ class IntelRawEvent(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint(
             "provider",
+            "generation_id",
+            "external_key",
             "payload_hash",
-            name="uq_intel_raw_events_provider_payload_hash",
+            name="uq_intel_raw_events_generation_record",
         ),
     )
 
@@ -38,6 +40,10 @@ class IntelRawEvent(TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+    generation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    page_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     vulnerability: Mapped["Vulnerability | None"] = relationship(back_populates="raw_events")
     source_links: Mapped[list["VulnerabilitySource"]] = relationship(back_populates="raw_event")

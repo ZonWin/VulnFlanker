@@ -16,6 +16,7 @@ from app.db.models.asset import (
 from app.db.models.cisa_kev_monitor_config import CisaKevMonitorConfig
 from app.db.models.intel_collection_run import IntelCollectionRun
 from app.db.models.intel_raw_event import IntelRawEvent
+from app.db.models.intel_source_config import IntelSourceConfig
 from app.db.models.notification import AdminNotification, SystemEvent
 from app.db.models.email_alert import EmailDelivery, EmailDeliveryAttempt, EmailSettings
 from app.db.models.match_result import (
@@ -35,6 +36,7 @@ from app.db.models.vulnerability_affected_scope import VulnerabilityAffectedScop
 from app.db.models.vulnerability_ai_enrichment import VulnerabilityAIEnrichment
 from app.db.models.vulnerability_review_resolution import VulnerabilityReviewResolution
 from app.db.models.vulnerability_source import VulnerabilitySource
+from app.db.models.vulnerability_source_contribution import VulnerabilitySourceContribution
 from app.db.models.watchvuln_monitor_config import WatchVulnMonitorConfig
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "CisaKevMonitorConfig",
     "IntelCollectionRun",
     "IntelRawEvent",
+    "IntelSourceConfig",
     "AdminNotification",
     "SystemEvent",
     "EmailDelivery",
@@ -80,5 +83,6 @@ __all__ = [
     "VulnerabilityAIEnrichment",
     "VulnerabilityReviewResolution",
     "VulnerabilitySource",
+    "VulnerabilitySourceContribution",
     "WatchVulnMonitorConfig",
 ]
