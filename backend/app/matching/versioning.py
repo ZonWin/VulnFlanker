@@ -215,13 +215,14 @@ def compare_version_identities(
         return _compare_ubuntu_kernel_versions(left_clean, right_clean)
 
     if resolved_left == VersionScheme.RPM:
-        return _uncomparable(
-            resolved_left,
-            resolved_right,
-            "RPM EVR comparison requires an RPM-compatible comparator.",
-            "version.rpm.comparator_unavailable",
-            left_clean,
-            right_clean,
+        result = compare_rpm_evr(left_clean, right_clean)
+        return VersionComparison(
+            result=result,
+            left_scheme=resolved_left,
+            right_scheme=resolved_right,
+            comparator="rpm_evr",
+            left_normalized=left_clean,
+            right_normalized=right_clean,
         )
 
     result = _compare_generic_versions(left_clean, right_clean)
@@ -254,6 +255,114 @@ def compare_debian_versions(left: str, right: str) -> int:
     if upstream_result:
         return upstream_result
     return _compare_debian_part(left_revision, right_revision)
+
+
+def compare_rpm_evr(left: str, right: str) -> int:
+    left_epoch, left_version, left_release = _split_rpm_evr(left)
+    right_epoch, right_version, right_release = _split_rpm_evr(right)
+    if left_epoch != right_epoch:
+        return 1 if left_epoch > right_epoch else -1
+    version_result = _rpmvercmp(left_version, right_version)
+    if version_result:
+        return version_result
+    return _rpmvercmp(left_release, right_release)
+
+
+def _split_rpm_evr(value: str) -> tuple[int, str, str]:
+    epoch = 0
+    remainder = value
+    if ":" in remainder:
+        possible_epoch, possible_remainder = remainder.split(":", 1)
+        if possible_epoch.isdigit():
+            epoch = int(possible_epoch)
+            remainder = possible_remainder
+    if "-" in remainder:
+        version, release = remainder.rsplit("-", 1)
+    else:
+        version, release = remainder, ""
+    return epoch, version, release
+
+
+def _rpmvercmp(left: str, right: str) -> int:
+    left_index = 0
+    right_index = 0
+    while left_index < len(left) or right_index < len(right):
+        while left_index < len(left) and not (
+            _rpm_is_alnum(left[left_index]) or left[left_index] in "~^"
+        ):
+            left_index += 1
+        while right_index < len(right) and not (
+            _rpm_is_alnum(right[right_index]) or right[right_index] in "~^"
+        ):
+            right_index += 1
+
+        left_char = left[left_index] if left_index < len(left) else ""
+        right_char = right[right_index] if right_index < len(right) else ""
+        if left_char == "~" or right_char == "~":
+            if left_char != "~":
+                return 1
+            if right_char != "~":
+                return -1
+            left_index += 1
+            right_index += 1
+            continue
+        if left_char == "^" or right_char == "^":
+            if left_char == right_char:
+                left_index += 1
+                right_index += 1
+                continue
+            if left_char == "^":
+                return 1 if not right_char else -1
+            return -1 if not left_char else 1
+
+        if not left_char or not right_char:
+            if left_char == right_char:
+                return 0
+            return 1 if left_char else -1
+
+        left_numeric = _rpm_is_digit(left_char)
+        right_numeric = _rpm_is_digit(right_char)
+        left_end = left_index
+        right_end = right_index
+        if left_numeric:
+            while left_end < len(left) and _rpm_is_digit(left[left_end]):
+                left_end += 1
+        else:
+            while left_end < len(left) and _rpm_is_alpha(left[left_end]):
+                left_end += 1
+        if right_numeric:
+            while right_end < len(right) and _rpm_is_digit(right[right_end]):
+                right_end += 1
+        else:
+            while right_end < len(right) and _rpm_is_alpha(right[right_end]):
+                right_end += 1
+
+        if left_numeric != right_numeric:
+            return 1 if left_numeric else -1
+        left_segment = left[left_index:left_end]
+        right_segment = right[right_index:right_end]
+        if left_numeric:
+            left_segment = left_segment.lstrip("0") or "0"
+            right_segment = right_segment.lstrip("0") or "0"
+            if len(left_segment) != len(right_segment):
+                return 1 if len(left_segment) > len(right_segment) else -1
+        if left_segment != right_segment:
+            return 1 if left_segment > right_segment else -1
+        left_index = left_end
+        right_index = right_end
+    return 0
+
+
+def _rpm_is_alnum(value: str) -> bool:
+    return value.isascii() and value.isalnum()
+
+
+def _rpm_is_digit(value: str) -> bool:
+    return value.isascii() and value.isdigit()
+
+
+def _rpm_is_alpha(value: str) -> bool:
+    return value.isascii() and value.isalpha()
 
 
 def _split_debian_version(value: str) -> tuple[int, str, str]:

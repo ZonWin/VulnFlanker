@@ -10,6 +10,7 @@ from app.matching.versioning import (
     VersionScheme,
     classify_version,
     compare_debian_versions,
+    compare_rpm_evr,
     compare_version_identities,
 )
 
@@ -61,6 +62,33 @@ def test_distinct_git_commits_require_ancestry_instead_of_lexical_order() -> Non
 )
 def test_debian_policy_version_order(left: str, right: str, expected: int) -> None:
     assert compare_debian_versions(left, right) == expected
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ("1:1.0-1.el9", "0:9.9-9.el9", 1),
+        ("1.0~rc1-1.el9", "1.0-1.el9", -1),
+        ("1.0^git1-1.el9", "1.0-1.el9", 1),
+        ("1.0^git1-1.el9", "1.0.1-1.el9", -1),
+        ("3.2.2-6.el9_4.1", "3.2.2-6.el9_4", 1),
+        ("1.01-1.el9", "1.1-1.el9", 0),
+    ],
+)
+def test_rpm_evr_version_order(left: str, right: str, expected: int) -> None:
+    assert compare_rpm_evr(left, right) == expected
+
+
+def test_rpm_identity_uses_evr_comparator() -> None:
+    comparison = compare_version_identities(
+        "3.2.2-6.el9_4",
+        "3.2.2-6.el9_4.1",
+        left_scheme="rpm",
+        right_scheme="rpm",
+    )
+
+    assert comparison.result == -1
+    assert comparison.comparator == "rpm_evr"
 
 
 def test_ubuntu_kernel_abi_compares_before_upload_revision() -> None:

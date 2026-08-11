@@ -20,6 +20,14 @@ UBUNTU_RELEASES = {
     "resolute": "26.04",
 }
 
+DEBIAN_RELEASES = {
+    "buster": "10",
+    "bullseye": "11",
+    "bookworm": "12",
+    "trixie": "13",
+    "forky": "14",
+}
+
 DISTRO_ALIASES = {
     "ubuntu": {"ubuntu", "ubuntulinux"},
     "debian": {"debian", "debianlinux"},
@@ -281,7 +289,14 @@ def _known_architecture(value: object) -> str | None:
 def _releases_match(left: object, right: object) -> bool:
     left_aliases = _release_aliases(left)
     right_aliases = _release_aliases(right)
-    return bool(left_aliases and right_aliases and left_aliases & right_aliases)
+    if left_aliases and right_aliases and left_aliases & right_aliases:
+        return True
+    scope_release = str(left or "").strip().lower()
+    asset_release = str(right or "").strip().lower()
+    return bool(
+        re.fullmatch(r"\d+", scope_release)
+        and re.match(rf"^{re.escape(scope_release)}(?:\.|$)", asset_release)
+    )
 
 
 def _release_aliases(value: object) -> set[str]:
@@ -290,6 +305,9 @@ def _release_aliases(value: object) -> set[str]:
         return set()
     aliases = {normalize_name(normalized)}
     for codename, version in UBUNTU_RELEASES.items():
+        if normalized in {codename, version}:
+            aliases.update({normalize_name(codename), normalize_name(version)})
+    for codename, version in DEBIAN_RELEASES.items():
         if normalized in {codename, version}:
             aliases.update({normalize_name(codename), normalize_name(version)})
     return aliases

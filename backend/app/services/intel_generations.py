@@ -243,10 +243,10 @@ def activate_generation(db: Session, run: IntelCollectionRun) -> IntelCollection
         )
         if incremental:
             changed_scope_vulnerability_ids = select(
-                VulnerabilityAffectedScope.vulnerability_id
+                VulnerabilitySourceContribution.vulnerability_id
             ).where(
-                VulnerabilityAffectedScope.source_name == run.source_name,
-                VulnerabilityAffectedScope.generation_id == run.generation_id,
+                VulnerabilitySourceContribution.source_name == run.source_name,
+                VulnerabilitySourceContribution.generation_id == run.generation_id,
             )
             scope_deactivation = scope_deactivation.where(
                 VulnerabilityAffectedScope.vulnerability_id.in_(

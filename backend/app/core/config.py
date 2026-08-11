@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     canonical_oval_releases: str = "bionic,focal,jammy,noble,resolute"
     canonical_page_size: int = 250
     canonical_timeout_seconds: int = 120
+    debian_tracker_json_url: str = (
+        "https://security-tracker.debian.org/tracker/data/json"
+    )
+    debian_tracker_page_size: int = 500
+    debian_tracker_timeout_seconds: int = 240
+    redhat_csaf_vex_base_url: str = (
+        "https://security.access.redhat.com/data/csaf/v2/vex"
+    )
+    redhat_csaf_page_size: int = 100
+    redhat_csaf_timeout_seconds: int = 180
     aliyun_avd_high_risk_url: str = "https://avd.aliyun.com/high-risk/list"
     watchvuln_collector_command: str | None = None
     watchvuln_collector_path: str | None = None
@@ -169,6 +179,10 @@ class Settings(BaseSettings):
         "nvd_overlap_seconds",
         "canonical_page_size",
         "canonical_timeout_seconds",
+        "debian_tracker_page_size",
+        "debian_tracker_timeout_seconds",
+        "redhat_csaf_page_size",
+        "redhat_csaf_timeout_seconds",
     )
     @classmethod
     def _positive_intel_source_value(cls, value: int) -> int:

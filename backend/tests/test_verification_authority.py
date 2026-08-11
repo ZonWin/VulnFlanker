@@ -44,7 +44,7 @@ def test_verification_rejects_reported_product_identity_mismatch() -> None:
     assert decision.details["identity_matches"] is False
 
 
-def test_verification_cannot_lexically_order_rpm_evr() -> None:
+def test_verification_uses_rpm_evr_policy_comparator() -> None:
     decision = decide_package_version_match_update(
         task_status="completed",
         error_code=None,
@@ -57,11 +57,9 @@ def test_verification_cannot_lexically_order_rpm_evr() -> None:
         authority_score=100,
     )
 
-    assert decision.match_status == "needs_review"
-    assert decision.reason_code == "verification.version_inconclusive"
-    assert decision.details["comparisons"][0]["reason_code"] == (
-        "version.rpm.comparator_unavailable"
-    )
+    assert decision.match_status == "verified"
+    assert decision.reason_code == "verification.version_affected"
+    assert decision.details["comparisons"][0]["comparator"] == "rpm_evr"
 
 
 def test_verification_records_debian_comparator_and_authority() -> None:

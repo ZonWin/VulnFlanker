@@ -531,7 +531,13 @@ def _declared_scope_result(
         "under_investigation",
     }:
         if not (
-            scope.source_name in {"ubuntu-security", "canonical-ubuntu"}
+            scope.source_name
+            in {
+                "ubuntu-security",
+                "canonical-ubuntu",
+                "debian-security-tracker",
+                "redhat-csaf",
+            }
             and status_key == "affected"
         ):
             return None

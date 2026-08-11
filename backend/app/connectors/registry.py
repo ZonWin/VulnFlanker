@@ -54,7 +54,9 @@ def build_builtin_registry() -> CollectorRegistry:
     from app.connectors.cisa_kev import CisaKevConnector
     from app.connectors.canonical_ubuntu import CanonicalUbuntuConnector
     from app.connectors.cve_list_v5 import CveListV5Connector
+    from app.connectors.debian_security_tracker import DebianSecurityTrackerConnector
     from app.connectors.nvd import NvdCveConnector
+    from app.connectors.redhat_csaf import RedHatCsafConnector
 
     registry = CollectorRegistry()
     registry.register_many(
@@ -64,6 +66,8 @@ def build_builtin_registry() -> CollectorRegistry:
             CveListV5Connector(),
             NvdCveConnector(),
             CanonicalUbuntuConnector(),
+            DebianSecurityTrackerConnector(),
+            RedHatCsafConnector(),
         )
     )
     return registry

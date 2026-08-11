@@ -19,6 +19,7 @@ dependencies = [
   "Pillow>=11,<13",
   "celery[redis]>=5.4,<6.0",
   "redis>=5.0,<6.0",
+  "zstandard>=0.23,<1.0",
 ]
 
 [project.optional-dependencies]
