@@ -153,11 +153,17 @@ def _component_product_matches(
         vulnerability.get("source_package"),
         vulnerability.get("binary_package"),
     )
+    package_identity_matches: list[dict[str, Any]] = []
     for expected in expected_packages:
         for field_name in ("source_package", "binary_package", "component_name"):
             candidate = component.get(field_name)
             if _names_equal(expected, candidate):
-                matches.append(_scored_match(field_name, expected, candidate, "package"))
+                package_identity_matches.append(
+                    _scored_match(field_name, expected, candidate, "package")
+                )
+    if expected_packages and not package_identity_matches:
+        return matches
+    matches.extend(package_identity_matches)
 
     component_name = component.get("component_name")
     if str(component.get("component_type") or "").lower() == "package":
