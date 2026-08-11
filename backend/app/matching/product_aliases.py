@@ -7,6 +7,7 @@ PRODUCT_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     (
         "linux kernel",
         "linux-kernel",
+        "linux",
         "kernel",
         "linux-image",
         "linux-image-generic",

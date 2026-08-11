@@ -3,6 +3,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.db.models import Vulnerability, VulnerabilitySource
+from app.matching.product_aliases import product_aliases
+from app.matching.utils import values_match_any
 
 
 def create_vulnerability(
@@ -47,3 +49,16 @@ def create_vulnerability(
     )
     db_session.commit()
     return vulnerability
+
+
+def test_linux_product_uses_explicit_kernel_aliases_without_loose_linux_token() -> None:
+    linux_aliases = product_aliases("Linux")
+
+    assert values_match_any(linux_aliases, ["Linux Kernel"])
+    assert values_match_any(linux_aliases, ["linux-image-generic"])
+    assert not values_match_any(linux_aliases, ["binutils-x86-64-linux-gnu"])
+
+
+def test_generic_product_tokens_do_not_match_unrelated_package_names() -> None:
+    assert not values_match_any(["service"], ["python3-service-identity"])
+    assert not values_match_any(["core"], ["apport-core-dump-handler"])

@@ -8,8 +8,12 @@ from typing import Any
 
 LOOSE_TOKEN_BLOCKLIST = {
     "apache",
+    "core",
     "http",
+    "kernel",
+    "linux",
     "server",
+    "service",
     "ssh",
 }
 

@@ -371,6 +371,7 @@ def create_verification_task(
         .options(
             selectinload(MatchResult.asset),
             selectinload(MatchResult.vulnerability),
+            selectinload(MatchResult.evidence),
         )
         .where(MatchResult.id == payload.match_result_id)
     )
@@ -563,14 +564,30 @@ def _default_parameters(match_result: MatchResult, task_type: str) -> dict[str, 
         return {}
     vulnerability = match_result.vulnerability
     parameters: dict[str, object] = {}
-    if vulnerability.product:
-        parameters["package_name"] = vulnerability.product
-        component_type = _component_type_for_product(vulnerability.product)
+    package_name = _matched_component_name(match_result) or vulnerability.product
+    if package_name:
+        parameters["package_name"] = package_name
+        component_type = _component_type_for_product(package_name)
+        if component_type is None and vulnerability.product:
+            component_type = _component_type_for_product(vulnerability.product)
         if component_type:
             parameters["component_type"] = component_type
     if vulnerability.fixed_versions:
         parameters["expected_version"] = vulnerability.fixed_versions
     return parameters
+
+
+def _matched_component_name(match_result: MatchResult) -> str | None:
+    for evidence in match_result.evidence:
+        if evidence.evidence_type not in {"product_match", "package_version"}:
+            continue
+        details = evidence.details_json or {}
+        if evidence.evidence_type == "product_match" and details.get("kind") != "component":
+            continue
+        name = str(details.get("name") or "").strip()
+        if name:
+            return name
+    return None
 
 
 def _component_type_for_product(product: str | None) -> str | None:

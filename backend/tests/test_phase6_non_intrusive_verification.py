@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.db.models import MatchResult, VerificationEvidence, VerificationTask
+from app.db.models import (
+    Asset,
+    AssetComponent,
+    MatchResult,
+    VerificationEvidence,
+    VerificationTask,
+)
+from app.services.matching import evaluate_matches
 from app.services.verification_orchestrator import run_local_verification_task
 from test_asset_ingestion import build_linux_snapshot
 from test_matching_engine import create_vulnerability
@@ -175,6 +182,49 @@ def test_phase6_worker_executes_local_package_version_check(
     match_result = db_session.get(MatchResult, match_result_id)
     assert match_result is not None
     assert match_result.status == "verified"
+
+
+def test_phase6_verification_defaults_to_matched_component_name(
+    client,
+    db_session,
+) -> None:
+    asset = Asset(
+        agent_id="agent-linux-alias-001",
+        hostname="inetutils-host",
+        platform="linux",
+        os_family="ubuntu",
+        os_version="24.04",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    db_session.add(
+        AssetComponent(
+            asset_id=asset.id,
+            component_name="inetutils-telnet",
+            component_type="package",
+            version="2:2.5-3ubuntu4.2",
+            source_type="dpkg",
+        )
+    )
+    vulnerability = create_vulnerability(
+        db_session,
+        canonical_id="CVE-2026-8607",
+        vendor="GNU",
+        product="Inetutils",
+        fixed_versions=None,
+        affected_versions=">= 1.9.3, <= 2.7",
+    )
+    results = evaluate_matches(db_session, vulnerability_id=vulnerability.canonical_id)
+    assert len(results) == 1
+    match_result_id = results[0].id
+
+    create_response = client.post(
+        "/api/v1/verification-tasks",
+        json={"match_result_id": match_result_id, "requested_by": "package-alias-test"},
+    )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["parameters"]["package_name"] == "inetutils-telnet"
 
 
 def test_phase6_worker_marks_absent_package_not_affected(

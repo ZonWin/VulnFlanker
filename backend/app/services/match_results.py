@@ -620,11 +620,8 @@ def _trace_asset_context(input_summary: Mapping[str, object]) -> dict[str, objec
     context = {
         key: input_summary.get(key)
         for key in (
-            "observed_components",
-            "observed_services",
-            "observed_versions",
-            "component_count",
-            "exposure_count",
+            "matched_components",
+            "matched_versions",
             "public_exposure_count",
             "matching_public_exposure_count",
         )

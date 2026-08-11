@@ -9,7 +9,7 @@ from app.matching.feature_rule import FeatureRule
 from app.matching.os_rule import OperatingSystemRule
 from app.matching.product_aliases import product_aliases
 from app.matching.product_rule import ProductRule
-from app.matching.utils import asset_platform_components, public_exposures_for_product
+from app.matching.utils import product_candidates, public_exposures_for_product
 from app.matching.version_rule import VersionRule
 
 
@@ -128,38 +128,26 @@ def _reason_code(result: RuleResult) -> str:
 def _input_summary(context: MatchContext, rule_name: str) -> dict[str, object]:
     product = context.vulnerability.get("product")
     if rule_name == "product_rule":
+        matched_components = [
+            _candidate_summary(candidate)
+            for candidate in product_candidates(context)
+        ][:8]
         return {
             "expected_product": product,
             "aliases": product_aliases(str(product)) if product else [],
-            "component_count": len(context.asset_components),
-            "exposure_count": len(context.asset_exposures),
-            "observed_components": [
-                component.get("component_name")
-                for component in context.asset_components[:5]
-            ],
-            "observed_services": [
-                exposure.get("service_name") or exposure.get("product")
-                for exposure in context.asset_exposures[:5]
-            ],
+            "matched_components": matched_components,
         }
     if rule_name == "version_rule":
-        observed_version_sources = [
-            *context.asset_components,
-            *asset_platform_components(context),
-            *context.asset_exposures,
-        ]
+        matched_versions = [
+            _candidate_summary(candidate)
+            for candidate in product_candidates(context)
+            if candidate.get("version")
+        ][:8]
         return {
             "expected_product": product,
             "affected_versions": context.vulnerability.get("affected_versions"),
             "fixed_versions": context.vulnerability.get("fixed_versions"),
-            "observed_versions": [
-                {
-                    "name": component.get("component_name") or component.get("product"),
-                    "version": component.get("version"),
-                }
-                for component in observed_version_sources
-                if component.get("version")
-            ][:8],
+            "matched_versions": matched_versions,
         }
     if rule_name == "os_rule":
         return {
@@ -177,8 +165,6 @@ def _input_summary(context: MatchContext, rule_name: str) -> dict[str, object]:
             "requires_feature_flag": context.vulnerability_conditions.get(
                 "requires_feature_flag"
             ),
-            "component_count": len(context.asset_components),
-            "exposure_count": len(context.asset_exposures),
         }
     if rule_name == "exposure_rule":
         public_exposure_count = sum(
@@ -192,3 +178,12 @@ def _input_summary(context: MatchContext, rule_name: str) -> dict[str, object]:
             "matching_public_exposure_count": len(public_exposures_for_product(context)),
         }
     return {}
+
+
+def _candidate_summary(candidate: dict) -> dict[str, object]:
+    return {
+        "name": candidate.get("component_name") or candidate.get("product"),
+        "kind": candidate.get("kind"),
+        "version": candidate.get("version"),
+        "source": candidate.get("source_type") or candidate.get("service_name"),
+    }

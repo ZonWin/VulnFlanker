@@ -123,9 +123,10 @@ const ownershipSourceLabels: Record<string, string> = {
 };
 
 function buildPackageVerificationDefaults(
-  packageName?: string | null
+  packageName?: string | null,
+  matchedPackageName?: string | null
 ): Pick<VerificationFormValues, "package_name" | "target_type"> {
-  const normalized = packageName?.trim() ?? "";
+  const normalized = (matchedPackageName || packageName)?.trim() ?? "";
   const componentType = verificationComponentTypeForProduct(normalized);
   return {
     package_name: componentType
@@ -135,14 +136,30 @@ function buildPackageVerificationDefaults(
   };
 }
 
+function matchedPackageNameFromEvidence(
+  evidence?: { evidence_type: string; details: Record<string, unknown> }[]
+) {
+  const match = evidence?.find((item) => {
+    if (!["product_match", "package_version"].includes(item.evidence_type)) {
+      return false;
+    }
+    if (item.evidence_type === "product_match" && item.details.kind !== "component") {
+      return false;
+    }
+    return typeof item.details.name === "string" && item.details.name.trim().length > 0;
+  });
+  return typeof match?.details.name === "string" ? match.details.name : null;
+}
+
 function packageFieldValueForTarget(
   targetType: VerificationTargetType,
-  packageName?: string | null
+  packageName?: string | null,
+  matchedPackageName?: string | null
 ) {
   if (targetType !== "package") {
     return fixedVerificationTargetMeta[targetType].displayName;
   }
-  const normalized = packageName?.trim() ?? "";
+  const normalized = (matchedPackageName || packageName)?.trim() ?? "";
   return verificationComponentTypeForProduct(normalized) ? "" : normalized;
 }
 
@@ -242,11 +259,8 @@ const traceContextLabels: Record<string, string> = {
   requires_feature_flag: t("功能条件"),
   requires_public_access: t("需要公网访问"),
   source_url: t("范围来源"),
-  observed_components: t("已发现组件"),
-  observed_services: t("已发现服务"),
-  observed_versions: t("资产版本"),
-  component_count: t("组件数量"),
-  exposure_count: t("暴露项数量"),
+  matched_components: t("命中组件"),
+  matched_versions: t("命中版本"),
   platform: t("平台"),
   os_family: t("操作系统"),
   os_version: t("系统版本"),
@@ -269,15 +283,12 @@ const riskScopeFieldOrder = [
 ];
 
 const assetContextFieldOrder = [
-  "observed_versions",
-  "observed_components",
-  "observed_services",
+  "matched_components",
+  "matched_versions",
   "platform",
   "os_family",
   "os_version",
   "kernel_version",
-  "component_count",
-  "exposure_count",
   "public_exposure_count",
   "matching_public_exposure_count"
 ];
@@ -305,7 +316,10 @@ function orderedTraceContextEntries(
 }
 
 function TraceContextValue({ field, value }: { field: string; value: unknown }) {
-  if (field === "observed_versions" && Array.isArray(value)) {
+  if (
+    ["matched_components", "matched_versions"].includes(field) &&
+    Array.isArray(value)
+  ) {
     return (
       <div className="trace-version-list">
         {value.map((item, index) => {
@@ -317,6 +331,11 @@ function TraceContextValue({ field, value }: { field: string; value: unknown }) 
               <Typography.Text code>
                 {String(versionItem.version || t("未提供版本"))}
               </Typography.Text>
+              {versionItem.kind || versionItem.source ? (
+                <Typography.Text type="secondary">
+                  {String(versionItem.kind || versionItem.source)}
+                </Typography.Text>
+              ) : null}
             </div>
           );
         })}
@@ -394,7 +413,7 @@ function TraceExpandedDetail({ record }: { record: MatchRuleTrace }) {
         <Typography.Text className="trace-expanded-title">{t("风险范围")}</Typography.Text>
         <TraceContextCell
           context={record.risk_scope ?? {}}
-          emptyText={t("未提供适用范围")}
+          emptyText={t("无")}
           fieldOrder={riskScopeFieldOrder}
         />
       </div>
@@ -402,7 +421,7 @@ function TraceExpandedDetail({ record }: { record: MatchRuleTrace }) {
         <Typography.Text className="trace-expanded-title">{t("资产情况")}</Typography.Text>
         <TraceContextCell
           context={record.asset_context ?? {}}
-          emptyText={t("未发现对应资产数据")}
+          emptyText={t("无")}
           fieldOrder={assetContextFieldOrder}
         />
       </div>
@@ -450,9 +469,17 @@ export default function MatchResultDetailPage() {
   });
 
   const detail = detailQuery.data;
+  const matchedPackageName = useMemo(
+    () => matchedPackageNameFromEvidence(detail?.evidence),
+    [detail?.evidence]
+  );
   const defaultVerificationTarget = useMemo(
-    () => buildPackageVerificationDefaults(detail?.vulnerability_product),
-    [detail?.vulnerability_product]
+    () =>
+      buildPackageVerificationDefaults(
+        detail?.vulnerability_product,
+        matchedPackageName
+      ),
+    [detail?.vulnerability_product, matchedPackageName]
   );
   const verificationNameLabel =
     selectedVerificationTarget === "package" ? t("待验证包名称") : t("待验证对象名称");
@@ -533,7 +560,11 @@ export default function MatchResultDetailPage() {
   const handleVerificationTargetChange = (targetType: VerificationTargetType) => {
     form.setFieldValue(
       "package_name",
-      packageFieldValueForTarget(targetType, detail?.vulnerability_product)
+      packageFieldValueForTarget(
+        targetType,
+        detail?.vulnerability_product,
+        matchedPackageName
+      )
     );
   };
 
