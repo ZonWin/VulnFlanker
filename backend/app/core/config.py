@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     nvd_page_size: int = 2_000
     nvd_timeout_seconds: int = 60
     nvd_overlap_seconds: int = 300
+    canonical_vex_url: str = (
+        "https://security-metadata.canonical.com/vex/vex-all.tar.xz"
+    )
+    canonical_oval_url_template: str = (
+        "https://security-metadata.canonical.com/oval/"
+        "com.ubuntu.{artifact_release}.cve.oval.xml.bz2"
+    )
+    canonical_oval_releases: str = "bionic,focal,jammy,noble,resolute"
+    canonical_page_size: int = 250
+    canonical_timeout_seconds: int = 120
     aliyun_avd_high_risk_url: str = "https://avd.aliyun.com/high-risk/list"
     watchvuln_collector_command: str | None = None
     watchvuln_collector_path: str | None = None
@@ -157,6 +167,8 @@ class Settings(BaseSettings):
         "nvd_page_size",
         "nvd_timeout_seconds",
         "nvd_overlap_seconds",
+        "canonical_page_size",
+        "canonical_timeout_seconds",
     )
     @classmethod
     def _positive_intel_source_value(cls, value: int) -> int:

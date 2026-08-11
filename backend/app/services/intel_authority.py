@@ -29,7 +29,11 @@ SOURCE_FIELD_AUTHORITY: dict[str, dict[str, int]] = {
         "references": 70,
         "description": 60,
     },
-    "canonical-ubuntu": {"ubuntu_scopes": 100},
+    "canonical-ubuntu": {
+        "ubuntu_scopes": 100,
+        "ubuntu_vex": 100,
+        "ubuntu_oval": 100,
+    },
     "debian-security-tracker": {"debian_scopes": 100},
     "redhat-csaf": {"redhat_scopes": 100},
     # Existing community/commercial feeds remain useful supplements during

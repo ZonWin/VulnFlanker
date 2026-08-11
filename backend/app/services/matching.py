@@ -524,14 +524,22 @@ def _declared_scope_result(
     scope: VulnerabilityAffectedScope,
 ) -> PipelineResult | None:
     status_key = str(scope.status or "affected").strip().lower().replace("-", "_")
-    if status_key not in {"not_affected", "package_not_present", "needs_review"}:
-        if not (scope.source_name == "ubuntu-security" and status_key == "affected"):
+    if status_key not in {
+        "not_affected",
+        "package_not_present",
+        "needs_review",
+        "under_investigation",
+    }:
+        if not (
+            scope.source_name in {"ubuntu-security", "canonical-ubuntu"}
+            and status_key == "affected"
+        ):
             return None
 
     status = (
         "not_affected"
         if status_key in {"not_affected", "package_not_present"}
-        else status_key
+        else "needs_review" if status_key == "under_investigation" else status_key
     )
     confidence = max(0.5, min(float(scope.authority_score or 0) / 100, 0.99))
     summary = (

@@ -32,7 +32,14 @@ class EnrichmentScope:
     product: str
     vendor: str | None = None
     ecosystem: str | None = None
+    distro: str | None = None
+    distro_release: str | None = None
+    source_package: str | None = None
+    binary_package: str | None = None
+    architecture: str | None = None
+    flavor: str | None = None
     version_scheme: str | None = None
+    version_type: str | None = None
     status: str = "affected"
     default_status: str | None = None
     cpe: str | None = None
@@ -231,6 +238,7 @@ def _replace_staged_scopes(
             VulnerabilityAffectedScope.vulnerability_id == vulnerability.id,
             VulnerabilityAffectedScope.source_name == run.source_name,
             VulnerabilityAffectedScope.generation_id == run.generation_id,
+            VulnerabilityAffectedScope.raw_event_id == raw_event.id,
         )
     )
     for scope in scopes:
@@ -238,7 +246,14 @@ def _replace_staged_scopes(
             "vendor": scope.vendor,
             "product": scope.product,
             "ecosystem": scope.ecosystem,
+            "distro": scope.distro,
+            "distro_release": scope.distro_release,
+            "source_package": scope.source_package,
+            "binary_package": scope.binary_package,
+            "architecture": scope.architecture,
+            "flavor": scope.flavor,
             "version_scheme": scope.version_scheme,
+            "version_type": scope.version_type,
             "status": scope.status,
             "default_status": scope.default_status,
             "cpe": scope.cpe,
@@ -261,7 +276,14 @@ def _replace_staged_scopes(
                 vendor=scope.vendor,
                 product=scope.product,
                 ecosystem=scope.ecosystem,
+                distro=scope.distro,
+                distro_release=scope.distro_release,
+                source_package=scope.source_package,
+                binary_package=scope.binary_package,
+                architecture=scope.architecture,
+                flavor=scope.flavor,
                 version_scheme=scope.version_scheme,
+                version_type=scope.version_type,
                 status=scope.status,
                 default_status=scope.default_status,
                 source_authority=scope.source_authority,

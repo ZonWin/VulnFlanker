@@ -20,11 +20,13 @@ from app.services.intel_generations import (
 
 def build_builtin_mapper_registry() -> EnrichmentMapperRegistry:
     from app.services.cve_list_normalization import CveListV5Mapper
+    from app.services.canonical_ubuntu_normalization import CanonicalUbuntuMapper
     from app.services.nvd_normalization import NvdCveMapper
 
     registry = EnrichmentMapperRegistry()
     registry.register(CveListV5Mapper())
     registry.register(NvdCveMapper())
+    registry.register(CanonicalUbuntuMapper())
     return registry
 
 
