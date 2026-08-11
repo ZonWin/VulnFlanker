@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from itertools import zip_longest
 from typing import Any
 
 from app.matching.base import MatchContext, MatchRule, RuleResult, rule_confidence
 from app.matching.utils import normalize_name, product_candidates
+from app.matching.versioning import (
+    VersionComparison,
+    VersionScheme,
+    classify_version,
+    compare_version_identities,
+    is_atomic_distro_or_commit_version,
+)
+
+
+VERSION_LITERAL_PATTERN = (
+    r"(?:[0-9][0-9a-zA-Z.\-_+:~]*|[a-fA-F][0-9a-fA-F]{6,63})"
+)
 
 
 @dataclass(slots=True)
@@ -15,6 +26,7 @@ class VersionConstraint:
     version: str
     source: str = "affected_versions"
     derived_from: str | None = None
+    version_scheme: str | None = None
 
 
 @dataclass(slots=True)
@@ -143,7 +155,7 @@ class VersionRule(MatchRule):
             evaluation = evaluate_version_constraint_groups(
                 version,
                 constraint_groups,
-                allow_metadata_mismatch=_can_compare_release_metadata(candidate),
+                observed_scheme=_candidate_version_scheme(candidate),
             )
             record = {
                 "candidate": candidate,
@@ -321,6 +333,8 @@ def _constraint_groups_from_affected_branch(
 ) -> list[list[VersionConstraint]]:
     if lowered in {"all", "all versions", "*"}:
         return [[VersionConstraint(">=", "0", source="affected_versions")]]
+    if is_atomic_distro_or_commit_version(lowered):
+        return [[VersionConstraint("==", lowered)]]
 
     groups: list[list[VersionConstraint]] = []
     used_spans: list[tuple[int, int]] = []
@@ -357,7 +371,7 @@ def _constraint_groups_from_affected_branch(
 
     operator_constraints: list[VersionConstraint] = []
     operator_pattern = re.compile(
-        r"(<=|>=|<|>|==|=)\s*v?([0-9][0-9a-zA-Z.\-_+]*)"
+        rf"(<=|>=|<|>|==|=)\s*v?({VERSION_LITERAL_PATTERN})"
     )
     for match in operator_pattern.finditer(lowered):
         if _span_is_used(match.span(), used_spans):
@@ -370,18 +384,18 @@ def _constraint_groups_from_affected_branch(
         groups.append(operator_constraints)
 
     before_match = re.search(
-        r"(?:before|prior to|earlier than|below)\s+v?([0-9][0-9a-zA-Z.\-_+]*)",
+        rf"(?:before|prior to|earlier than|below)\s+v?({VERSION_LITERAL_PATTERN})",
         lowered,
     )
     if before_match and not _span_is_used(before_match.span(), used_spans):
         groups.append([VersionConstraint("<", before_match.group(1))])
 
-    earlier_match = re.search(r"v?([0-9][0-9a-zA-Z.\-_+]*)\s+and earlier", lowered)
+    earlier_match = re.search(rf"v?({VERSION_LITERAL_PATTERN})\s+and earlier", lowered)
     if earlier_match and not _span_is_used(earlier_match.span(), used_spans):
         groups.append([VersionConstraint("<=", earlier_match.group(1))])
 
     if not groups:
-        exact_match = re.fullmatch(r"v?([0-9][0-9a-zA-Z.\-_+]*)", lowered)
+        exact_match = re.fullmatch(rf"v?({VERSION_LITERAL_PATTERN})", lowered)
         if exact_match:
             groups.append([VersionConstraint("==", exact_match.group(1))])
 
@@ -389,7 +403,7 @@ def _constraint_groups_from_affected_branch(
 
 
 def first_version(text: str) -> str | None:
-    match = re.search(r"v?([0-9][0-9a-zA-Z.\-_+]*)", text)
+    match = re.search(rf"v?({VERSION_LITERAL_PATTERN})", text)
     if not match:
         return None
     return match.group(1)
@@ -407,15 +421,19 @@ def evaluate_version_constraints(
     constraints: list[VersionConstraint],
     *,
     allow_metadata_mismatch: bool = False,
+    observed_scheme: VersionScheme | str | None = None,
 ) -> VersionEvaluation:
     evaluations: list[bool] = []
     comparisons: list[dict[str, Any]] = []
     for constraint in constraints:
-        compared, reason = compare_versions_with_reason(
+        comparison_result = compare_version_identities(
             version,
             constraint.version,
-            allow_metadata_mismatch=allow_metadata_mismatch,
+            left_scheme=observed_scheme,
+            right_scheme=constraint.version_scheme,
         )
+        compared = comparison_result.result
+        reason = comparison_result.reason
         matched = (
             _apply_operator(compared, constraint.operator)
             if compared is not None
@@ -426,8 +444,7 @@ def evaluate_version_constraints(
             constraint=constraint,
             compare_result=compared,
             matched=matched,
-            reason=reason,
-            allow_metadata_mismatch=allow_metadata_mismatch,
+            comparison=comparison_result,
         )
         comparisons.append(comparison)
         if compared is None:
@@ -445,6 +462,7 @@ def evaluate_version_constraint_groups(
     constraint_groups: list[list[VersionConstraint]],
     *,
     allow_metadata_mismatch: bool = False,
+    observed_scheme: VersionScheme | str | None = None,
 ) -> VersionEvaluation:
     comparisons: list[dict[str, str | int | bool | None]] = []
     uncertain_reason: str | None = None
@@ -453,6 +471,7 @@ def evaluate_version_constraint_groups(
             version,
             constraints,
             allow_metadata_mismatch=allow_metadata_mismatch,
+            observed_scheme=observed_scheme,
         )
         comparisons.extend(
             {**comparison, "group_index": group_index}
@@ -483,77 +502,8 @@ def compare_versions_with_reason(
     *,
     allow_metadata_mismatch: bool = False,
 ) -> tuple[int | None, str | None]:
-    metadata_reason = _packaging_metadata_reason(
-        left,
-        right,
-        allow_metadata_mismatch=allow_metadata_mismatch,
-    )
-    if metadata_reason:
-        return None, metadata_reason
-
-    left_parts = _version_parts(left)
-    right_parts = _version_parts(right)
-    if not left_parts or not right_parts:
-        return None, "One side did not contain comparable version tokens."
-    for left_part, right_part in zip_longest(left_parts, right_parts, fillvalue=0):
-        if left_part == right_part:
-            continue
-        if isinstance(left_part, int) and isinstance(right_part, int):
-            return (1 if left_part > right_part else -1), None
-        left_text = str(left_part)
-        right_text = str(right_part)
-        if left_text == right_text:
-            continue
-        return (1 if left_text > right_text else -1), None
-    return 0, None
-
-
-def _version_parts(version: str) -> list[int | str]:
-    cleaned = version.strip().lower()
-    if not re.search(r"\d", cleaned):
-        return []
-    parts: list[int | str] = []
-    for part in re.findall(r"\d+|[a-z]+", cleaned):
-        if part.isdigit():
-            parts.append(int(part))
-        else:
-            parts.append(part)
-    return parts
-
-
-def _packaging_metadata_reason(
-    left: str,
-    right: str,
-    *,
-    allow_metadata_mismatch: bool = False,
-) -> str | None:
-    left_clean = left.strip().lower()
-    right_clean = right.strip().lower()
-    if not left_clean or not right_clean:
-        return "One side of the version comparison is empty."
-
-    if allow_metadata_mismatch:
-        return None
-
-    if (":" in left_clean) != (":" in right_clean):
-        return (
-            "Only one version includes a package epoch; distro package versions "
-            "require conservative review."
-        )
-
-    if _has_distro_release_metadata(left_clean) != _has_distro_release_metadata(right_clean):
-        return (
-            "Only one version includes distro release metadata; vendor backports "
-            "may make direct upstream comparison unsafe."
-        )
-
-    if ("~" in left_clean) != ("~" in right_clean):
-        return (
-            "Only one version includes pre-release/backport metadata; direct "
-            "comparison is conservative needs_review."
-        )
-
-    return None
+    comparison = compare_version_identities(left, right)
+    return comparison.result, comparison.reason
 
 
 def _has_distro_release_metadata(version: str) -> bool:
@@ -568,6 +518,7 @@ def _constraint_details(constraint: VersionConstraint) -> dict[str, str | None]:
         "version": constraint.version,
         "source": constraint.source,
         "derived_from": constraint.derived_from,
+        "version_scheme": constraint.version_scheme,
     }
 
 
@@ -595,8 +546,7 @@ def _comparison_details(
     constraint: VersionConstraint,
     compare_result: int | None,
     matched: bool | None,
-    reason: str | None,
-    allow_metadata_mismatch: bool,
+    comparison: VersionComparison,
 ) -> dict[str, Any]:
     return {
         "observed_version": observed_version,
@@ -606,35 +556,22 @@ def _comparison_details(
         "derived_from": constraint.derived_from,
         "compare_result": compare_result,
         "matched": matched,
-        "reason": reason,
-        "metadata_policy": (
-            "metadata_mismatch_allowed"
-            if allow_metadata_mismatch
-            else "conservative_review"
-            if reason and _is_metadata_reason(reason)
-            else "direct_compare"
-        ),
+        "reason": comparison.reason,
+        "reason_code": comparison.reason_code,
+        "comparator": comparison.comparator,
+        "observed_scheme": comparison.left_scheme.value,
+        "constraint_scheme": comparison.right_scheme.value,
+        "observed_normalized": comparison.left_normalized,
+        "constraint_normalized": comparison.right_normalized,
         "observed_metadata": _version_metadata_profile(observed_version),
         "constraint_metadata": _version_metadata_profile(constraint.version),
     }
 
 
-def _is_metadata_reason(reason: str) -> bool:
-    lowered = reason.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "package epoch",
-            "distro release metadata",
-            "pre-release/backport metadata",
-            "vendor backports",
-        )
-    )
-
-
-def _version_metadata_profile(version: str) -> dict[str, bool]:
+def _version_metadata_profile(version: str) -> dict[str, bool | str]:
     cleaned = version.strip().lower()
     return {
+        "scheme": classify_version(cleaned).value,
         "has_epoch": ":" in cleaned,
         "has_distro_release_metadata": _has_distro_release_metadata(cleaned),
         "has_tilde": "~" in cleaned,
@@ -658,8 +595,22 @@ def _version_evidence_type(candidate: dict[str, Any]) -> str:
     return "package_version"
 
 
-def _can_compare_release_metadata(candidate: dict[str, Any]) -> bool:
-    return candidate.get("component_type") in {"operating_system", "kernel"}
+def _candidate_version_scheme(candidate: dict[str, Any]) -> VersionScheme:
+    explicit = candidate.get("version_scheme")
+    version = str(candidate.get("version") or "")
+    source_type = str(candidate.get("source_type") or "").lower()
+    component_type = str(candidate.get("component_type") or "").lower()
+    if explicit:
+        return classify_version(version, hint=str(explicit))
+    if source_type in {"apt", "dpkg", "dpkg-query", "debian"}:
+        return VersionScheme.DEBIAN
+    if source_type in {"rpm", "dnf", "yum"}:
+        return VersionScheme.RPM
+    if component_type == "kernel":
+        detected = classify_version(version)
+        if detected == VersionScheme.UBUNTU_KERNEL:
+            return detected
+    return classify_version(version)
 
 
 def _affected_text_mentions_candidate_version(

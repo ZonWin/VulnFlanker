@@ -331,7 +331,8 @@ def test_phase6_worker_executes_local_kernel_version_check(
 
     match_result = db_session.get(MatchResult, match_result_id)
     assert match_result is not None
-    assert match_result.status == "verified"
+    assert match_result.status == "needs_review"
+    assert "comparison was inconclusive" in (match_result.match_reason or "")
 
 
 def test_phase6_worker_executes_local_os_version_text_check(
