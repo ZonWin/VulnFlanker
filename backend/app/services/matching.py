@@ -14,6 +14,7 @@ from app.db.models import (
 )
 from app.matching.base import MatchContext
 from app.matching.pipeline import PipelineResult, evaluate_pipeline
+from app.matching.scope_resolver import ScopeResolution, resolve_affected_scopes
 from app.matching.utils import extract_conditions
 from app.services.audit import create_audit_log
 from app.services.platform_settings import (
@@ -136,22 +137,25 @@ def evaluate_asset_vulnerability(
     numeric_config = numeric_config or get_rule_numeric_config_values(db)
     scopes = vulnerability.affected_scopes
     if scopes:
-        pipeline_result = _aggregate_scope_pipeline_results(
-            [
-                (
-                    scope,
-                    evaluate_pipeline(
-                        build_match_context(
+        scope_resolution = resolve_affected_scopes(asset, scopes)
+        if scope_resolution.selected:
+            pipeline_result = _aggregate_scope_pipeline_results(
+                [
+                    (
+                        scope,
+                        _evaluate_affected_scope(
                             asset,
                             vulnerability,
+                            scope,
                             numeric_config=numeric_config,
-                            affected_scope=scope,
-                        )
-                    ),
-                )
-                for scope in scopes
-            ]
-        )
+                        ),
+                    )
+                    for scope in scope_resolution.selected
+                ],
+                resolution=scope_resolution,
+            )
+        else:
+            pipeline_result = _no_applicable_scope_result(scope_resolution)
     else:
         context = build_match_context(asset, vulnerability, numeric_config=numeric_config)
         pipeline_result = evaluate_pipeline(context)
@@ -420,6 +424,8 @@ def _load_vulnerabilities(
 
 def _aggregate_scope_pipeline_results(
     scope_results: list[tuple[VulnerabilityAffectedScope, PipelineResult]],
+    *,
+    resolution: ScopeResolution | None = None,
 ) -> PipelineResult:
     affected = [item for item in scope_results if item[1].status == "affected"]
     reviews = [item for item in scope_results if item[1].status == "needs_review"]
@@ -431,30 +437,7 @@ def _aggregate_scope_pipeline_results(
     rule_results = []
     rule_trace: list[dict] = []
     for scope, result in scope_results:
-        scope_summary = {
-            "scope_id": scope.id,
-            "vendor": scope.vendor,
-            "product": scope.product,
-            "ecosystem": scope.ecosystem,
-            "distro": scope.distro,
-            "distro_release": scope.distro_release,
-            "source_package": scope.source_package,
-            "binary_package": scope.binary_package,
-            "architecture": scope.architecture,
-            "flavor": scope.flavor,
-            "version_scheme": scope.version_scheme,
-            "version_type": scope.version_type,
-            "status": scope.status,
-            "default_status": scope.default_status,
-            "source_authority": scope.source_authority,
-            "authority_score": scope.authority_score,
-            "purl": scope.purl,
-            "cpe": scope.cpe,
-            "platforms": scope.platforms_json or [],
-            "affected_versions": scope.affected_versions,
-            "fixed_versions": scope.fixed_versions,
-            "source_url": scope.source_url,
-        }
+        scope_summary = _scope_summary(scope)
         for item in result.evidence:
             evidence.append(
                 {
@@ -465,6 +448,23 @@ def _aggregate_scope_pipeline_results(
         for item in result.rule_trace:
             rule_trace.append({**item, "affected_scope": scope_summary})
         rule_results.extend(result.rule_results)
+    if resolution is not None:
+        evidence.append(
+            {
+                "type": "scope_resolution",
+                "summary": (
+                    f"Selected {len(resolution.selected)} of "
+                    f"{len(resolution.applicable)} applicable affected scopes."
+                ),
+                "confidence": confidence,
+                "details": {
+                    "selected_scope_ids": [
+                        str(scope.id) for scope in resolution.selected
+                    ],
+                    "excluded_scopes": resolution.excluded,
+                },
+            }
+        )
     return PipelineResult(
         status=status,
         confidence=round(confidence, 2),
@@ -474,6 +474,139 @@ def _aggregate_scope_pipeline_results(
         rule_results=rule_results,
         rule_trace=rule_trace,
     )
+
+
+def _evaluate_affected_scope(
+    asset: Asset,
+    vulnerability: Vulnerability,
+    scope: VulnerabilityAffectedScope,
+    *,
+    numeric_config: RuleNumericConfigValues,
+) -> PipelineResult:
+    declared = _declared_scope_result(scope)
+    if declared is not None:
+        return declared
+    return evaluate_pipeline(
+        build_match_context(
+            asset,
+            vulnerability,
+            numeric_config=numeric_config,
+            affected_scope=scope,
+        )
+    )
+
+
+def _declared_scope_result(
+    scope: VulnerabilityAffectedScope,
+) -> PipelineResult | None:
+    status_key = str(scope.status or "affected").strip().lower().replace("-", "_")
+    if status_key not in {"not_affected", "package_not_present", "needs_review"}:
+        if not (scope.source_name == "ubuntu-security" and status_key == "affected"):
+            return None
+
+    status = (
+        "not_affected"
+        if status_key in {"not_affected", "package_not_present"}
+        else status_key
+    )
+    confidence = max(0.5, min(float(scope.authority_score or 0) / 100, 0.99))
+    summary = (
+        f"{scope.source_name} declares {scope.distro or 'the target platform'} "
+        f"{scope.distro_release or ''} package {scope.source_package or scope.product} "
+        f"as {status.replace('_', ' ')}."
+    )
+    evidence = {
+        "type": "distro_status",
+        "summary": summary,
+        "confidence": confidence,
+        "details": {
+            "declared_status": scope.status,
+            "source_status": scope.default_status,
+            "authority": scope.source_authority,
+            "authority_score": scope.authority_score,
+            "affected_scope": _scope_summary(scope),
+        },
+    }
+    return PipelineResult(
+        status=status,
+        confidence=round(confidence, 2),
+        reason=summary,
+        rule_version="match-distro-status-v1",
+        evidence=[evidence],
+        rule_trace=[
+            {
+                "rule_name": "distro_status_rule",
+                "rule_version": "v1",
+                "executed": True,
+                "status": status,
+                "confidence": round(confidence, 2),
+                "reason": summary,
+                "reason_code": f"distro_status.{status}",
+                "uncertain_reason": summary if status == "needs_review" else None,
+                "input_summary": _scope_summary(scope),
+                "evidence_count": 1,
+            }
+        ],
+    )
+
+
+def _no_applicable_scope_result(resolution: ScopeResolution) -> PipelineResult:
+    reason = "No vulnerability affected scope applies to this asset identity."
+    return PipelineResult(
+        status="not_affected",
+        confidence=0.9,
+        reason=reason,
+        rule_version="match-scope-pipeline-v2",
+        evidence=[
+            {
+                "type": "scope_no_match",
+                "summary": reason,
+                "confidence": 0.9,
+                "details": {"excluded_scopes": resolution.excluded},
+            }
+        ],
+        rule_trace=[
+            {
+                "rule_name": "scope_resolver",
+                "rule_version": "v1",
+                "executed": True,
+                "status": "not_affected",
+                "confidence": 0.9,
+                "reason": reason,
+                "reason_code": "scope_resolver.not_affected.no_applicable_scope",
+                "uncertain_reason": None,
+                "input_summary": {"excluded_scopes": resolution.excluded},
+                "evidence_count": 1,
+            }
+        ],
+    )
+
+
+def _scope_summary(scope: VulnerabilityAffectedScope) -> dict[str, object]:
+    return {
+        "scope_id": scope.id,
+        "vendor": scope.vendor,
+        "product": scope.product,
+        "ecosystem": scope.ecosystem,
+        "distro": scope.distro,
+        "distro_release": scope.distro_release,
+        "source_package": scope.source_package,
+        "binary_package": scope.binary_package,
+        "architecture": scope.architecture,
+        "flavor": scope.flavor,
+        "version_scheme": scope.version_scheme,
+        "version_type": scope.version_type,
+        "status": scope.status,
+        "default_status": scope.default_status,
+        "source_authority": scope.source_authority,
+        "authority_score": scope.authority_score,
+        "purl": scope.purl,
+        "cpe": scope.cpe,
+        "platforms": scope.platforms_json or [],
+        "affected_versions": scope.affected_versions,
+        "fixed_versions": scope.fixed_versions,
+        "source_url": scope.source_url,
+    }
 
 
 def _ensure_vulnerability_ready(

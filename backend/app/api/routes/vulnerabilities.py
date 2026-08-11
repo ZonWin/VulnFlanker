@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -9,12 +11,15 @@ from app.schemas.ai import (
     VulnerabilityAIEnrichmentTriggerRequest,
 )
 from app.schemas.vulnerability import (
+    UbuntuSecuritySyncOut,
     VulnerabilityCreate,
     VulnerabilityDetail,
     VulnerabilityListPage,
     VulnerabilityReadinessStats,
     VulnerabilityUpdate,
 )
+from app.services.audit import create_audit_log
+from app.services.ubuntu_security import sync_ubuntu_security_statuses
 from app.services.vulnerability_catalog import (
     DuplicateVulnerabilityError,
     create_vulnerability,
@@ -178,6 +183,50 @@ async def post_vulnerability_ai_enrichment(
     except ValueError as exc:
         raise _ai_enrichment_http_error(exc) from exc
     return VulnerabilityAIEnrichmentRunResponse(enrichment=enrichment)
+
+
+@router.post(
+    "/{vulnerability_id}/ubuntu-security-sync",
+    response_model=UbuntuSecuritySyncOut,
+)
+async def post_ubuntu_security_sync(
+    vulnerability_id: str,
+    current_user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+) -> UbuntuSecuritySyncOut:
+    try:
+        result = sync_ubuntu_security_statuses(db, vulnerability_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail == "Vulnerability not found" else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ubuntu security data could not be loaded: {exc}",
+        ) from exc
+    create_audit_log(
+        db,
+        action="vulnerability.ubuntu_security_synced",
+        resource_type="vulnerability",
+        resource_id=result.vulnerability_id,
+        actor_type="user",
+        actor_id=current_user.id,
+        outcome="success",
+        summary=f"Imported {result.scope_count} Ubuntu security scopes.",
+        details={
+            **user_audit_details(current_user),
+            "canonical_id": result.canonical_id,
+            "status_counts": result.status_counts,
+        },
+    )
+    db.commit()
+    return UbuntuSecuritySyncOut(
+        vulnerability_id=result.vulnerability_id,
+        canonical_id=result.canonical_id,
+        scope_count=result.scope_count,
+        status_counts=result.status_counts,
+    )
 
 
 @router.patch("/{vulnerability_id}", response_model=VulnerabilityDetail)
