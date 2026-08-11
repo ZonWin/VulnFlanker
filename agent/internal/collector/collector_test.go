@@ -18,16 +18,46 @@ PRETTY_NAME="Ubuntu 22.04 LTS"
 }
 
 func TestParsePackageRows(t *testing.T) {
-	packages := parsePackageRows([]byte("nginx\t1.24.0\nopenssl\t3.0.2\n"), "dpkg")
+	packages := parsePackageRows(
+		[]byte("nginx\t1:1.24.0-1ubuntu1\tnginx\tamd64\nopenssl\t3.0.2\topenssl\tamd64\n"),
+		"dpkg",
+	)
 
 	if len(packages) != 2 {
 		t.Fatalf("len(packages) = %d", len(packages))
 	}
-	if packages[0].Name != "nginx" || packages[0].Version != "1.24.0" {
+	if packages[0].Name != "nginx" || packages[0].Version != "1:1.24.0-1ubuntu1" {
 		t.Fatalf("unexpected first package: %#v", packages[0])
+	}
+	if packages[0].SourcePackage != "nginx" || packages[0].Architecture != "amd64" {
+		t.Fatalf("missing structured package identity: %#v", packages[0])
 	}
 	if _, ok := FindPackage(packages, "nginx"); !ok {
 		t.Fatal("expected nginx package to be found")
+	}
+}
+
+func TestPackagesToComponentsCarriesDistroIdentity(t *testing.T) {
+	components := packagesToComponents(
+		[]PackageInfo{{
+			Name:          "linux-image-generic",
+			Version:       "5.15.0.119.119",
+			Source:        "dpkg",
+			SourcePackage: "linux-meta",
+			Architecture:  "amd64",
+		}},
+		PlatformInfo{OSFamily: "ubuntu", OSVersion: "22.04", Architecture: "amd64"},
+	)
+
+	if len(components) != 1 {
+		t.Fatalf("len(components) = %d", len(components))
+	}
+	component := components[0]
+	if component.Ecosystem != "deb" || component.VersionScheme != "debian" {
+		t.Fatalf("unexpected version identity: %#v", component)
+	}
+	if component.Distro != "ubuntu" || component.DistroRelease != "22.04" {
+		t.Fatalf("unexpected distro identity: %#v", component)
 	}
 }
 

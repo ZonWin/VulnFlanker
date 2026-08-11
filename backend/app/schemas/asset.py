@@ -15,6 +15,16 @@ class AssetComponentOut(BaseModel):
     component_type: str
     version: str | None = None
     source_type: str | None = None
+    ecosystem: str | None = None
+    distro: str | None = None
+    distro_release: str | None = None
+    source_package: str | None = None
+    binary_package: str | None = None
+    architecture: str | None = None
+    flavor: str | None = None
+    version_scheme: str | None = None
+    purl: str | None = None
+    cpe: str | None = None
     install_path: str | None = None
     evidence_ref: str | None = None
 

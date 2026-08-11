@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
+import json
 import re
 from typing import Any
 
@@ -61,6 +62,23 @@ class NormalizedVulnerabilityRecord:
 class NormalizedAffectedScope:
     vendor: str | None
     product: str
+    ecosystem: str | None = None
+    distro: str | None = None
+    distro_release: str | None = None
+    source_package: str | None = None
+    binary_package: str | None = None
+    architecture: str | None = None
+    flavor: str | None = None
+    version_scheme: str | None = None
+    version_type: str | None = None
+    status: str = "affected"
+    default_status: str | None = None
+    source_authority: str = "unknown"
+    authority_score: int = 0
+    purl: str | None = None
+    cpe: str | None = None
+    platforms: list[str] = field(default_factory=list)
+    structured_versions: list[dict[str, object]] = field(default_factory=list)
     affected_versions: str | None = None
     fixed_versions: str | None = None
     source_name: str = "cve-record"
@@ -496,15 +514,26 @@ def _replace_affected_scopes(
         )
     )
     for scope in record.affected_scopes:
+        identity_values = [
+            scope.vendor or "",
+            scope.product,
+            scope.ecosystem or "",
+            scope.distro or "",
+            scope.distro_release or "",
+            scope.source_package or "",
+            scope.binary_package or "",
+            scope.architecture or "",
+            scope.flavor or "",
+            scope.version_scheme or "",
+            scope.status,
+            scope.default_status or "",
+            scope.affected_versions or "",
+            scope.fixed_versions or "",
+            json.dumps(scope.platforms, ensure_ascii=False, sort_keys=True),
+            json.dumps(scope.structured_versions, ensure_ascii=False, sort_keys=True),
+        ]
         scope_key = sha256(
-            "\x1f".join(
-                [
-                    scope.vendor or "",
-                    scope.product,
-                    scope.affected_versions or "",
-                    scope.fixed_versions or "",
-                ]
-            ).encode("utf-8")
+            "\x1f".join(identity_values).encode("utf-8")
         ).hexdigest()
         db.add(
             VulnerabilityAffectedScope(
@@ -514,6 +543,23 @@ def _replace_affected_scopes(
                 scope_key=scope_key,
                 vendor=scope.vendor,
                 product=scope.product,
+                ecosystem=scope.ecosystem,
+                distro=scope.distro,
+                distro_release=scope.distro_release,
+                source_package=scope.source_package,
+                binary_package=scope.binary_package,
+                architecture=scope.architecture,
+                flavor=scope.flavor,
+                version_scheme=scope.version_scheme,
+                version_type=scope.version_type,
+                status=scope.status,
+                default_status=scope.default_status,
+                source_authority=scope.source_authority,
+                authority_score=scope.authority_score,
+                purl=scope.purl,
+                cpe=scope.cpe,
+                platforms_json=scope.platforms,
+                structured_versions_json=scope.structured_versions,
                 affected_versions=scope.affected_versions,
                 fixed_versions=scope.fixed_versions,
                 source_url=scope.source_url,
@@ -665,22 +711,76 @@ def _extract_cve_affected_scopes(
         product = _meaningful_cve_value(affected.get("product"))
         if not product:
             continue
+        versions = [
+            dict(version)
+            for version in affected.get("versions", [])
+            if isinstance(version, dict)
+        ]
+        version_types = {
+            value
+            for version in versions
+            if (value := _clean_text(version.get("versionType")))
+        }
+        version_type = next(iter(version_types)) if len(version_types) == 1 else None
+        default_status = _clean_text(affected.get("defaultStatus"))
+        statuses = {
+            value.lower()
+            for version in versions
+            if (value := _clean_text(version.get("status")))
+        }
+        status = "affected" if "affected" in statuses else default_status or "unknown"
+        cpes = _normalize_string_list(affected.get("cpes"))
         scopes.append(
             NormalizedAffectedScope(
                 vendor=_meaningful_cve_value(affected.get("vendor")),
                 product=product,
-                affected_versions=_format_cve_affected_versions(
-                    affected.get("versions")
-                ),
+                binary_package=_meaningful_cve_value(affected.get("packageName")),
+                version_scheme=_cve_version_scheme(version_type),
+                version_type=version_type,
+                status=status.lower(),
+                default_status=default_status.lower() if default_status else None,
+                source_authority="cna",
+                authority_score=70,
+                purl=_meaningful_cve_value(affected.get("packageURL")),
+                cpe=cpes[0] if cpes else None,
+                platforms=_normalize_string_list(affected.get("platforms")),
+                structured_versions=versions,
+                affected_versions=_format_cve_affected_versions(versions),
                 source_url=source_url,
             )
         )
     return list(
         {
-            (scope.vendor, scope.product, scope.affected_versions, scope.fixed_versions): scope
+            (
+                scope.vendor,
+                scope.product,
+                scope.binary_package,
+                scope.version_type,
+                scope.status,
+                scope.default_status,
+                scope.affected_versions,
+                scope.fixed_versions,
+                json.dumps(scope.platforms, sort_keys=True),
+                json.dumps(scope.structured_versions, sort_keys=True),
+            ): scope
             for scope in scopes
         }.values()
     )
+
+
+def _cve_version_scheme(version_type: str | None) -> str | None:
+    normalized = (version_type or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"semver", "semantic", "generic", "custom"}:
+        return "generic" if normalized != "custom" else "opaque"
+    if normalized in {"git", "git-commit", "commit"}:
+        return "git_commit"
+    if normalized in {"deb", "debian", "dpkg"}:
+        return "debian"
+    if normalized in {"rpm", "evr"}:
+        return "rpm"
+    return "opaque"
 
 
 def _extract_cve_cvss(metrics: Any) -> tuple[float | None, str | None]:

@@ -124,6 +124,16 @@ class AssetComponentIn(BaseModel):
     component_type: str
     version: str | None = None
     source_type: str | None = None
+    ecosystem: str | None = Field(default=None, max_length=32)
+    distro: str | None = Field(default=None, max_length=64)
+    distro_release: str | None = Field(default=None, max_length=64)
+    source_package: str | None = Field(default=None, max_length=255)
+    binary_package: str | None = Field(default=None, max_length=255)
+    architecture: str | None = Field(default=None, max_length=64)
+    flavor: str | None = Field(default=None, max_length=64)
+    version_scheme: str | None = Field(default=None, max_length=32)
+    purl: str | None = Field(default=None, max_length=512)
+    cpe: str | None = Field(default=None, max_length=512)
     install_path: str | None = None
     evidence_ref: str | None = None
 

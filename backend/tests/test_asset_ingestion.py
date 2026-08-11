@@ -34,6 +34,13 @@ def build_linux_snapshot(
                 "component_type": "package",
                 "version": nginx_version,
                 "source_type": "dpkg",
+                "ecosystem": "deb",
+                "distro": "ubuntu",
+                "distro_release": "22.04",
+                "source_package": "nginx",
+                "binary_package": "nginx",
+                "architecture": "amd64",
+                "version_scheme": "debian",
                 "install_path": "/usr/sbin/nginx",
             },
             {
@@ -41,6 +48,13 @@ def build_linux_snapshot(
                 "component_type": "package",
                 "version": "3.0.2",
                 "source_type": "dpkg",
+                "ecosystem": "deb",
+                "distro": "ubuntu",
+                "distro_release": "22.04",
+                "source_package": "openssl",
+                "binary_package": "openssl",
+                "architecture": "amd64",
+                "version_scheme": "debian",
             },
         ],
         "exposures": [
@@ -81,6 +95,27 @@ def test_asset_snapshot_endpoint_persists_asset_profile(client, db_session) -> N
     assert asset.architecture == "x86_64"
     assert len(asset.components) == 2
     assert len(asset.exposures) == 1
+    nginx = next(item for item in asset.components if item.component_name == "nginx")
+    assert nginx.ecosystem == "deb"
+    assert nginx.distro == "ubuntu"
+    assert nginx.distro_release == "22.04"
+    assert nginx.source_package == "nginx"
+    assert nginx.binary_package == "nginx"
+    assert nginx.architecture == "amd64"
+    assert nginx.version_scheme == "debian"
+
+    detail_response = client.get(f"/api/v1/assets/{asset.id}")
+    assert detail_response.status_code == 200
+    detail_nginx = next(
+        item
+        for item in detail_response.json()["components"]
+        if item["component_name"] == "nginx"
+    )
+    assert detail_nginx["ecosystem"] == "deb"
+    assert detail_nginx["distro"] == "ubuntu"
+    assert detail_nginx["source_package"] == "nginx"
+    assert detail_nginx["binary_package"] == "nginx"
+    assert detail_nginx["version_scheme"] == "debian"
 
     snapshot = db_session.scalar(
         select(AssetSnapshot).where(AssetSnapshot.asset_id == asset.id)

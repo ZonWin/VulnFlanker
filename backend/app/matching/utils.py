@@ -154,6 +154,16 @@ def asset_platform_components(context: Any) -> list[dict]:
     platform = asset.get("platform")
     os_version = asset.get("os_version")
     kernel_version = asset.get("kernel_version")
+    architecture = asset.get("architecture")
+    distro = str(os_family).lower() if os_family else None
+    distro_release = str(os_version) if os_version else None
+    package_ecosystem = (
+        "deb"
+        if distro in {"ubuntu", "debian"}
+        else "rpm"
+        if distro in {"rhel", "redhat", "centos", "rocky", "almalinux", "amzn"}
+        else None
+    )
 
     if os_family or platform or os_version:
         os_name = str(os_family or platform or "operating system")
@@ -171,6 +181,11 @@ def asset_platform_components(context: Any) -> list[dict]:
                 )
                 or None,
                 "platform": platform,
+                "ecosystem": package_ecosystem,
+                "distro": distro,
+                "distro_release": distro_release,
+                "architecture": architecture,
+                "version_scheme": "generic",
                 "evidence_ref": "asset.os_version",
             }
         )
@@ -183,6 +198,15 @@ def asset_platform_components(context: Any) -> list[dict]:
                 "component_type": "kernel",
                 "version": kernel_version,
                 "source_type": "uname",
+                "ecosystem": package_ecosystem,
+                "distro": distro,
+                "distro_release": distro_release,
+                "source_package": "linux" if package_ecosystem == "deb" else "kernel",
+                "architecture": architecture,
+                "flavor": _kernel_flavor(str(kernel_version)),
+                "version_scheme": (
+                    "ubuntu_kernel" if distro == "ubuntu" else "generic"
+                ),
                 "install_path": " ".join(
                     str(value) for value in (platform, kernel_version) if value
                 )
@@ -192,6 +216,11 @@ def asset_platform_components(context: Any) -> list[dict]:
         )
 
     return candidates
+
+
+def _kernel_flavor(version: str) -> str | None:
+    match = re.search(r"-\d+(?:\.\d+)?-([a-z][a-z0-9-]*)$", version.lower())
+    return match.group(1) if match else None
 
 
 def public_exposures_for_product(context: Any) -> list[dict]:

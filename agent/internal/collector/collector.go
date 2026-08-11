@@ -54,6 +54,16 @@ type Component struct {
 	ComponentType string `json:"component_type"`
 	Version       string `json:"version,omitempty"`
 	SourceType    string `json:"source_type,omitempty"`
+	Ecosystem     string `json:"ecosystem,omitempty"`
+	Distro        string `json:"distro,omitempty"`
+	DistroRelease string `json:"distro_release,omitempty"`
+	SourcePackage string `json:"source_package,omitempty"`
+	BinaryPackage string `json:"binary_package,omitempty"`
+	Architecture  string `json:"architecture,omitempty"`
+	Flavor        string `json:"flavor,omitempty"`
+	VersionScheme string `json:"version_scheme,omitempty"`
+	PURL          string `json:"purl,omitempty"`
+	CPE           string `json:"cpe,omitempty"`
 	InstallPath   string `json:"install_path,omitempty"`
 	EvidenceRef   string `json:"evidence_ref,omitempty"`
 }
@@ -81,9 +91,11 @@ type PlatformInfo struct {
 }
 
 type PackageInfo struct {
-	Name    string
-	Version string
-	Source  string
+	Name          string
+	Version       string
+	Source        string
+	SourcePackage string
+	Architecture  string
 }
 
 func Collect(agentID string, agentVersion string, options ProfileOptions) (Snapshot, error) {
@@ -110,7 +122,7 @@ func Collect(agentID string, agentVersion string, options ProfileOptions) (Snaps
 		AllowAutoVerify:    options.AllowAutoVerify,
 		AllowAutoRemediate: options.AllowAutoRemediate,
 		CollectedAt:        time.Now().UTC(),
-		Components:         packagesToComponents(packages),
+		Components:         packagesToComponents(packages, platformInfo),
 		Exposures:          ListeningExposures(),
 		Firewalls:          []Firewall{},
 	}
@@ -133,13 +145,22 @@ func CurrentPlatformInfo() PlatformInfo {
 
 func InstalledPackages() []PackageInfo {
 	if path, err := exec.LookPath("dpkg-query"); err == nil {
-		out, err := exec.Command(path, "-W", "-f=${Package}\t${Version}\n").Output()
+		out, err := exec.Command(
+			path,
+			"-W",
+			"-f=${Package}\t${Version}\t${source:Package}\t${Architecture}\n",
+		).Output()
 		if err == nil {
 			return parsePackageRows(out, "dpkg")
 		}
 	}
 	if path, err := exec.LookPath("rpm"); err == nil {
-		out, err := exec.Command(path, "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n").Output()
+		out, err := exec.Command(
+			path,
+			"-qa",
+			"--qf",
+			"%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{SOURCERPM}\t%{ARCH}\n",
+		).Output()
 		if err == nil {
 			return parsePackageRows(out, "rpm")
 		}
@@ -388,35 +409,78 @@ func parsePackageRows(data []byte, source string) []PackageInfo {
 	packages := []PackageInfo{}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
-		parts := strings.SplitN(scanner.Text(), "\t", 2)
-		if len(parts) != 2 {
+		parts := strings.Split(scanner.Text(), "\t")
+		if len(parts) < 2 {
 			continue
 		}
 		name := strings.TrimSpace(parts[0])
 		version := strings.TrimSpace(parts[1])
+		sourcePackage := name
+		if len(parts) > 2 && strings.TrimSpace(parts[2]) != "" {
+			sourcePackage = strings.TrimSpace(parts[2])
+		}
+		if source == "rpm" {
+			sourcePackage = sourcePackageFromRPM(sourcePackage, name)
+		}
+		architecture := ""
+		if len(parts) > 3 {
+			architecture = strings.TrimSpace(parts[3])
+		}
 		if name == "" {
 			continue
 		}
 		packages = append(packages, PackageInfo{
-			Name:    name,
-			Version: version,
-			Source:  source,
+			Name:          name,
+			Version:       version,
+			Source:        source,
+			SourcePackage: sourcePackage,
+			Architecture:  architecture,
 		})
 	}
 	return packages
 }
 
-func packagesToComponents(packages []PackageInfo) []Component {
+func packagesToComponents(packages []PackageInfo, platform PlatformInfo) []Component {
 	components := make([]Component, 0, len(packages))
 	for _, pkg := range packages {
+		ecosystem := ""
+		versionScheme := ""
+		if pkg.Source == "dpkg" {
+			ecosystem = "deb"
+			versionScheme = "debian"
+		} else if pkg.Source == "rpm" {
+			ecosystem = "rpm"
+			versionScheme = "rpm"
+		}
 		components = append(components, Component{
 			ComponentName: pkg.Name,
 			ComponentType: "package",
 			Version:       pkg.Version,
 			SourceType:    pkg.Source,
+			Ecosystem:     ecosystem,
+			Distro:        platform.OSFamily,
+			DistroRelease: platform.OSVersion,
+			SourcePackage: pkg.SourcePackage,
+			BinaryPackage: pkg.Name,
+			Architecture:  firstNonEmpty(pkg.Architecture, platform.Architecture),
+			VersionScheme: versionScheme,
 		})
 	}
 	return components
+}
+
+func sourcePackageFromRPM(sourceRPM string, fallback string) string {
+	cleaned := strings.TrimSuffix(strings.TrimSpace(sourceRPM), ".src.rpm")
+	if cleaned == "" || cleaned == "(none)" {
+		return fallback
+	}
+	parts := strings.Split(cleaned, "-")
+	for index, part := range parts {
+		if index > 0 && len(part) > 0 && part[0] >= '0' && part[0] <= '9' {
+			return strings.Join(parts[:index], "-")
+		}
+	}
+	return fallback
 }
 
 func primaryIP() string {

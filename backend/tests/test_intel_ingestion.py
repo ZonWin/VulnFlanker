@@ -98,8 +98,16 @@ SAMPLE_CVE_RECORD = {
                     "defaultStatus": "unaffected",
                     "product": "iCagenda extension for Joomla",
                     "vendor": "icagenda.com",
+                    "packageName": "com-icagenda",
+                    "packageURL": "pkg:generic/com-icagenda",
+                    "cpes": ["cpe:2.3:a:icagenda:icagenda:*:*:*:*:*:joomla:*:*"],
+                    "platforms": ["Joomla"],
                     "versions": [
-                        {"status": "affected", "version": "3.2.1-4.0.7"}
+                        {
+                            "status": "affected",
+                            "version": "3.2.1-4.0.7",
+                            "versionType": "semver",
+                        }
                     ],
                 }
             ],
@@ -506,6 +514,17 @@ def test_collect_cisa_kev_enriches_from_cve_record_details(db_session) -> None:
     assert len(scopes) == 1
     assert scopes[0].product == "iCagenda extension for Joomla"
     assert scopes[0].affected_versions == "3.2.1-4.0.7"
+    assert scopes[0].binary_package == "com-icagenda"
+    assert scopes[0].version_scheme == "generic"
+    assert scopes[0].version_type == "semver"
+    assert scopes[0].status == "affected"
+    assert scopes[0].default_status == "unaffected"
+    assert scopes[0].source_authority == "cna"
+    assert scopes[0].authority_score == 70
+    assert scopes[0].purl == "pkg:generic/com-icagenda"
+    assert scopes[0].cpe.startswith("cpe:2.3:a:icagenda")
+    assert scopes[0].platforms_json == ["Joomla"]
+    assert scopes[0].structured_versions_json[0]["versionType"] == "semver"
     assert vulnerability.published_at is not None
     constraints = parse_constraints(vulnerability.affected_versions, None)
     assert version_satisfies_constraints("3.2.1", constraints) is True
