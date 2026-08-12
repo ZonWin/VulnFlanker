@@ -414,7 +414,7 @@ def _load_vulnerabilities(
         selectinload(Vulnerability.sources),
         selectinload(Vulnerability.affected_scopes),
         selectinload(Vulnerability.review_resolutions),
-    )
+    ).where(Vulnerability.staging_generation_id.is_(None))
     if vulnerability_id:
         statement = statement.where(
             or_(

@@ -112,6 +112,7 @@ def sync_ubuntu_security_statuses(
         select(Vulnerability)
         .options(selectinload(Vulnerability.affected_scopes))
         .where(
+            Vulnerability.staging_generation_id.is_(None),
             or_(
                 Vulnerability.id == vulnerability_id,
                 Vulnerability.canonical_id == vulnerability_id,
