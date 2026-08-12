@@ -12,7 +12,6 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tag,
   Tooltip,
   Typography
@@ -25,25 +24,29 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 
 import {
+  collectIntelEnrichmentSource,
   collectIntelSource,
   clearIntelSourceVulnerabilities,
   getCisaKevMonitorConfig,
   getIntelRawEvents,
   getIntelRuns,
   getIntelSources,
-  getWatchVulnMonitorConfig,
+  isIntelEnrichmentSourceName,
   normalizeIntelRawEvent,
   updateCisaKevMonitorConfig,
-  updateWatchVulnMonitorConfig
+  updateIntelEnrichmentSourceConfig
 } from "@/api/intel";
-import type { IntelManualSourceName } from "@/api/intel";
+import type {
+  IntelEnrichmentSourceName,
+  IntelVisibleSourceName
+} from "@/api/intel";
 import type {
   CisaKevMonitorConfigUpdate,
   IntelCollectionRun,
+  IntelEnrichmentSourceConfigUpdate,
   IntelRawEvent,
   IntelSourceVulnerabilityCleanupResult,
-  IntelSourceStatus,
-  WatchVulnMonitorConfigUpdate
+  IntelSourceStatus
 } from "@/api/types";
 import ErrorState from "@/components/ErrorState";
 import PageHeader from "@/components/PageHeader";
@@ -51,9 +54,8 @@ import ResizableTable from "@/components/ResizableTable";
 import { formatDateTime, formatDurationSeconds } from "@/utils/format";
 
 interface IntelCollectFormValues {
-  source_name: IntelManualSourceName;
+  source_name: IntelVisibleSourceName;
   limit?: number | null;
-  min_score?: number | null;
 }
 
 interface MonitorDraft {
@@ -61,12 +63,13 @@ interface MonitorDraft {
   interval_seconds: number;
   limit?: number | null;
   latest_only?: boolean;
+  stale_after_seconds?: number;
+  expire_after_seconds?: number;
 }
 
 const defaultValues: IntelCollectFormValues = {
   source_name: "cisa-kev",
-  limit: 100,
-  min_score: 7
+  limit: 100
 };
 
 const defaultCisaMonitorDraft: MonitorDraft = {
@@ -76,65 +79,37 @@ const defaultCisaMonitorDraft: MonitorDraft = {
   latest_only: false
 };
 
-const defaultWatchVulnMonitorDraft: MonitorDraft = {
+const defaultEnrichmentMonitorDraft: MonitorDraft = {
   enabled: false,
-  interval_seconds: 1800,
-  limit: null
+  interval_seconds: 21600,
+  stale_after_seconds: 172800,
+  expire_after_seconds: 604800
 };
 
-const sourceOptions: Array<{ label: string; value: IntelManualSourceName }> = [
+const sourceOptions: Array<{ label: string; value: IntelVisibleSourceName }> = [
   { label: "CISA KEV", value: "cisa-kev" },
-  { label: t("阿里云漏洞库"), value: "aliyun-avd" },
-  { label: "WatchVuln", value: "watchvuln" }
+  { label: "CVE List V5", value: "cve-list-v5" },
+  { label: "NVD", value: "nvd" },
+  { label: "Canonical Ubuntu Security", value: "canonical-ubuntu" },
+  { label: "Debian Security Tracker", value: "debian-security-tracker" },
+  { label: "Red Hat CSAF VEX", value: "redhat-csaf" }
 ];
 
-const watchVulnScopeRows = [
-  {
-    source: t("阿里云漏洞库"),
-    level: t("高危、严重"),
-    rule: t("WatchVuln 有价值记录")
-  },
-  {
-    source: t("长亭漏洞库"),
-    level: t("高危、严重"),
-    rule: t("中文漏洞通告")
-  },
-  {
-    source: "OSCS",
-    level: t("高危、严重"),
-    rule: t("发布预警")
-  },
-  {
-    source: t("奇安信威胁情报"),
-    level: t("高危、严重"),
-    rule: t("CERT 验证、POC/EXP 或技术细节公开")
-  },
-  {
-    source: t("微步在线"),
-    level: t("严重"),
-    rule: t("近期披露，且有 POC 与漏洞分析")
-  },
-  {
-    source: "Seebug",
-    level: t("高危、严重"),
-    rule: t("WatchVuln 有价值记录")
-  },
-  {
-    source: t("Struts2 公告"),
-    level: "Important、Critical",
-    rule: t("官方安全公告")
-  },
-  {
-    source: "CISA KEV",
-    level: t("严重"),
-    rule: t("已知在野利用")
-  },
-  {
-    source: t("启明星辰"),
-    level: t("高危、严重"),
-    rule: t("WatchVuln 有价值记录")
-  }
-];
+const enrichmentSourceHints: Record<IntelEnrichmentSourceName, string> = {
+  "cve-list-v5": t("CVE 官方记录源，用于补全通用漏洞描述、产品与版本范围。"),
+  nvd: t("NVD 补充通用漏洞元数据、CPE 与版本范围；自动采集按最近修改窗口增量更新。"),
+  "canonical-ubuntu": t("Canonical Ubuntu 官方安全数据，用于补全 Ubuntu 发行版、软件包状态与修复版本。"),
+  "debian-security-tracker": t("Debian Security Tracker 用于补全 Debian 发行版、软件包状态与修复版本。"),
+  "redhat-csaf": t("Red Hat CSAF VEX 用于补全 RHEL 产品、软件包状态与修复版本。")
+};
+
+const enrichmentDefaultScheduleSeconds: Record<IntelEnrichmentSourceName, number> = {
+  "cve-list-v5": 3600,
+  nvd: 7200,
+  "canonical-ubuntu": 21600,
+  "debian-security-tracker": 21600,
+  "redhat-csaf": 21600
+};
 
 function statusColor(status?: string | null) {
   if (!status) {
@@ -160,14 +135,27 @@ function intervalSecondsToHours(value: number) {
 }
 
 function intervalHoursToSeconds(value: number) {
-  return Math.max(60, Math.round(value * 3600));
+  return Math.max(300, Math.round(value * 3600));
 }
 
-function singleCollectLimitTooltip(sourceName: IntelManualSourceName) {
+function singleCollectLimitTooltip(sourceName: IntelVisibleSourceName) {
   if (sourceName === "cisa-kev") {
     return t("CISA KEV 手动采集默认仅采集本地最新 dateAdded 水位之后的新增漏洞；本地无水位时按此数量采集最新窗口。填 0 表示全量采集历史目录。");
   }
-  return t("填 0 表示不限制数量，采集器会尽可能拉取当前来源可返回的记录。");
+  return t("留空表示不限制数量，采集器会尽可能拉取当前来源可返回的记录。");
+}
+
+function freshnessColor(state?: string | null) {
+  if (state === "fresh") {
+    return "green";
+  }
+  if (state === "stale") {
+    return "orange";
+  }
+  if (state === "expired") {
+    return "red";
+  }
+  return "default";
 }
 
 function qualityTags(record: IntelRawEvent) {
@@ -201,6 +189,9 @@ interface MonitorStatusData {
   last_started_at: string | null;
   last_error: string | null;
   next_run_at: string | null;
+  last_success_at?: string | null;
+  freshness_state?: string | null;
+  freshness_age_seconds?: number | null;
 }
 
 interface MonitorSettingsPanelProps {
@@ -213,6 +204,8 @@ interface MonitorSettingsPanelProps {
   draft: MonitorDraft;
   minInterval: number;
   maxInterval: number;
+  showLimit?: boolean;
+  showFreshnessThresholds?: boolean;
   latestOnlyLabel?: string;
   latestOnlyHint?: ReactNode;
   onDraftChange: (updater: (current: MonitorDraft) => MonitorDraft) => void;
@@ -232,6 +225,8 @@ function MonitorSettingsPanel({
   draft,
   minInterval,
   maxInterval,
+  showLimit = true,
+  showFreshnessThresholds = false,
   latestOnlyLabel,
   latestOnlyHint,
   onDraftChange,
@@ -242,11 +237,12 @@ function MonitorSettingsPanel({
 }: MonitorSettingsPanelProps) {
   const minIntervalHours = intervalSecondsToHours(minInterval);
   const maxIntervalHours = intervalSecondsToHours(maxInterval);
-  const settingsColMd = latestOnlyLabel ? 6 : 8;
+  const settingsColMd = showFreshnessThresholds ? 8 : latestOnlyLabel ? 6 : 8;
 
   return (
     <Space className="page-stack" orientation="vertical" size={12}>
       {isError ? <ErrorState error={error} /> : null}
+      {hint ? <Alert type="info" showIcon title={hint} /> : null}
       <Row className="monitor-settings-row" gutter={[12, 12]} align="bottom">
         <Col xs={24} sm={12} md={settingsColMd}>
           <Space direction="vertical" size={4}>
@@ -311,32 +307,80 @@ function MonitorSettingsPanel({
             />
           </Space>
         </Col>
-        <Col xs={24} sm={12} md={settingsColMd}>
-          <Space className="page-stack" direction="vertical" size={4}>
-            <Space className="monitor-field-label" size={4}>
-              <Typography.Text type="secondary">{t("定时采集数量")}</Typography.Text>
-              {hint ? (
-                <Tooltip title={hint}>
+        {showLimit ? (
+          <Col xs={24} sm={12} md={settingsColMd}>
+            <Space className="page-stack" direction="vertical" size={4}>
+              <Space className="monitor-field-label" size={4}>
+                <Typography.Text type="secondary">{t("定时采集数量")}</Typography.Text>
+                <Tooltip title={t("留空表示定时采集不限制单次数量。") }>
                   <CircleAlert size={14} />
                 </Tooltip>
-              ) : null}
+              </Space>
+              <InputNumber
+                min={1}
+                max={5000}
+                placeholder={t("不限制")}
+                value={draft.limit ?? undefined}
+                disabled={isSaving}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  onDraftChange((current) => ({
+                    ...current,
+                    limit: value === null ? null : Number(value)
+                  }))
+                }
+              />
             </Space>
-            <InputNumber
-              min={1}
-              max={5000}
-              placeholder={t("不限制")}
-              value={draft.limit ?? undefined}
-              disabled={isSaving}
-              style={{ width: "100%" }}
-              onChange={(value) =>
-                onDraftChange((current) => ({
-                  ...current,
-                  limit: value === null ? null : Number(value)
-                }))
-              }
-            />
-          </Space>
-        </Col>
+          </Col>
+        ) : null}
+        {showFreshnessThresholds ? (
+          <>
+            <Col xs={24} sm={12} md={settingsColMd}>
+              <Space className="page-stack" direction="vertical" size={4}>
+                <Typography.Text type="secondary">{t("数据陈旧阈值")}</Typography.Text>
+                <InputNumber
+                  min={1}
+                  max={8760}
+                  step={1}
+                  addonAfter={t("小时")}
+                  value={intervalSecondsToHours(
+                    draft.stale_after_seconds ?? defaultEnrichmentMonitorDraft.stale_after_seconds!
+                  )}
+                  disabled={isSaving}
+                  style={{ width: "100%" }}
+                  onChange={(value) =>
+                    onDraftChange((current) => ({
+                      ...current,
+                      stale_after_seconds: intervalHoursToSeconds(Number(value ?? 1))
+                    }))
+                  }
+                />
+              </Space>
+            </Col>
+            <Col xs={24} sm={12} md={settingsColMd}>
+              <Space className="page-stack" direction="vertical" size={4}>
+                <Typography.Text type="secondary">{t("数据失效阈值")}</Typography.Text>
+                <InputNumber
+                  min={1}
+                  max={17520}
+                  step={1}
+                  addonAfter={t("小时")}
+                  value={intervalSecondsToHours(
+                    draft.expire_after_seconds ?? defaultEnrichmentMonitorDraft.expire_after_seconds!
+                  )}
+                  disabled={isSaving}
+                  style={{ width: "100%" }}
+                  onChange={(value) =>
+                    onDraftChange((current) => ({
+                      ...current,
+                      expire_after_seconds: intervalHoursToSeconds(Number(value ?? 1))
+                    }))
+                  }
+                />
+              </Space>
+            </Col>
+          </>
+        ) : null}
       </Row>
       <div className="monitor-summary-grid">
         <div className="monitor-summary-item">
@@ -351,6 +395,26 @@ function MonitorSettingsPanel({
           <Typography.Text type="secondary">{t("下次预计运行时间")}</Typography.Text>
           <Typography.Text>{formatDateTime(data?.next_run_at)}</Typography.Text>
         </div>
+        {data?.freshness_state ? (
+          <>
+            <div className="monitor-summary-item">
+              <Typography.Text type="secondary">{t("最近成功")}</Typography.Text>
+              <Typography.Text>{formatDateTime(data.last_success_at)}</Typography.Text>
+            </div>
+            <div className="monitor-summary-item">
+              <Typography.Text type="secondary">{t("数据新鲜度")}</Typography.Text>
+              <Tag color={freshnessColor(data.freshness_state)}>{data.freshness_state}</Tag>
+            </div>
+            <div className="monitor-summary-item">
+              <Typography.Text type="secondary">{t("数据年龄")}</Typography.Text>
+              <Typography.Text>
+                {data.freshness_age_seconds === null || data.freshness_age_seconds === undefined
+                  ? "-"
+                  : formatDurationSeconds(data.freshness_age_seconds)}
+              </Typography.Text>
+            </div>
+          </>
+        ) : null}
       </div>
       {data?.last_error ? (
         <Alert type="warning" showIcon message={t("最近自动采集错误")} description={data.last_error} />
@@ -382,8 +446,8 @@ export default function IntelCollectionPage() {
   const queryClient = useQueryClient();
   const [cisaMonitorDraft, setCisaMonitorDraft] =
     useState<MonitorDraft>(defaultCisaMonitorDraft);
-  const [watchVulnMonitorDraft, setWatchVulnMonitorDraft] =
-    useState<MonitorDraft>(defaultWatchVulnMonitorDraft);
+  const [enrichmentMonitorDraft, setEnrichmentMonitorDraft] =
+    useState<MonitorDraft>(defaultEnrichmentMonitorDraft);
 
   const sourcesQuery = useQuery({
     queryKey: ["intel", "sources"],
@@ -393,11 +457,6 @@ export default function IntelCollectionPage() {
   const cisaMonitorQuery = useQuery({
     queryKey: ["intel", "cisa-kev", "monitor"],
     queryFn: getCisaKevMonitorConfig
-  });
-
-  const watchVulnMonitorQuery = useQuery({
-    queryKey: ["intel", "watchvuln", "monitor"],
-    queryFn: getWatchVulnMonitorConfig
   });
 
   useEffect(() => {
@@ -412,16 +471,30 @@ export default function IntelCollectionPage() {
     });
   }, [cisaMonitorQuery.data]);
 
+  const selectedEnrichmentSource = isIntelEnrichmentSourceName(selectedSource)
+    ? selectedSource
+    : null;
+  const selectedEnrichmentStatus = selectedEnrichmentSource
+    ? sourcesQuery.data?.find((item) => item.source_name === selectedEnrichmentSource)
+    : undefined;
+
   useEffect(() => {
-    if (!watchVulnMonitorQuery.data) {
+    if (!selectedEnrichmentSource) {
       return;
     }
-    setWatchVulnMonitorDraft({
-      enabled: watchVulnMonitorQuery.data.enabled,
-      interval_seconds: watchVulnMonitorQuery.data.interval_seconds,
-      limit: watchVulnMonitorQuery.data.limit
+    setEnrichmentMonitorDraft({
+      enabled: selectedEnrichmentStatus?.enabled ?? false,
+      interval_seconds:
+        selectedEnrichmentStatus?.schedule_seconds ??
+        enrichmentDefaultScheduleSeconds[selectedEnrichmentSource],
+      stale_after_seconds:
+        selectedEnrichmentStatus?.stale_after_seconds ??
+        defaultEnrichmentMonitorDraft.stale_after_seconds,
+      expire_after_seconds:
+        selectedEnrichmentStatus?.expire_after_seconds ??
+        defaultEnrichmentMonitorDraft.expire_after_seconds
     });
-  }, [watchVulnMonitorQuery.data]);
+  }, [selectedEnrichmentSource, selectedEnrichmentStatus]);
 
   const runsQuery = useQuery({
     queryKey: ["intel", "runs"],
@@ -436,11 +509,17 @@ export default function IntelCollectionPage() {
   const collectMutation = useMutation({
     mutationFn: (values: IntelCollectFormValues) => {
       const sourceName = values.source_name ?? defaultValues.source_name;
+      if (isIntelEnrichmentSourceName(sourceName)) {
+        return collectIntelEnrichmentSource(sourceName, {
+          limit: values.limit && values.limit > 0 ? values.limit : null,
+          async_mode: true,
+          force_baseline: false
+        });
+      }
       return collectIntelSource(sourceName, {
-        limit: sourceName === "watchvuln" ? null : values.limit ?? null,
-        min_score: sourceName === "aliyun-avd" ? values.min_score ?? null : null,
+        limit: values.limit ?? null,
         async_mode: false,
-        latest_only: sourceName === "cisa-kev" && values.limit !== 0
+        latest_only: values.limit !== 0
       });
     },
     onSuccess: (result) => {
@@ -477,22 +556,31 @@ export default function IntelCollectionPage() {
     }
   });
 
-  const watchVulnMonitorMutation = useMutation({
-    mutationFn: (values: WatchVulnMonitorConfigUpdate) =>
-      updateWatchVulnMonitorConfig(values),
+  const enrichmentMonitorMutation = useMutation({
+    mutationFn: ({
+      sourceName,
+      values
+    }: {
+      sourceName: IntelEnrichmentSourceName;
+      values: IntelEnrichmentSourceConfigUpdate;
+    }) => updateIntelEnrichmentSourceConfig(sourceName, values),
     onSuccess: (result) => {
-      messageApi.success(t("WatchVuln 自动监测设置已更新"));
-      setWatchVulnMonitorDraft({
-        enabled: result.enabled,
-        interval_seconds: result.interval_seconds,
-        limit: result.limit
-      });
-      queryClient.setQueryData(["intel", "watchvuln", "monitor"], result);
-      void queryClient.invalidateQueries({ queryKey: ["intel", "sources"] });
+      messageApi.success(
+        t("{{v0}} 自动采集设置已更新", {
+          v0: result.source_label ?? result.source_name
+        })
+      );
+      queryClient.setQueryData<IntelSourceStatus[]>(
+        ["intel", "sources"],
+        (current) =>
+          current?.map((item) =>
+            item.source_name === result.source_name ? result : item
+          ) ?? [result]
+      );
       void queryClient.invalidateQueries({ queryKey: ["intel", "runs"] });
     },
     onError: (error) => {
-      messageApi.error(error instanceof Error ? error.message : t("自动监测设置更新失败"));
+      messageApi.error(error instanceof Error ? error.message : t("自动采集设置更新失败"));
     }
   });
 
@@ -551,6 +639,66 @@ export default function IntelCollectionPage() {
     });
   }
 
+  const enrichmentMonitorData: MonitorStatusData | undefined = selectedEnrichmentStatus
+    ? {
+        enabled: selectedEnrichmentStatus.enabled,
+        interval_seconds:
+          selectedEnrichmentStatus.schedule_seconds ??
+          enrichmentMonitorDraft.interval_seconds,
+        limit: null,
+        last_status: selectedEnrichmentStatus.last_status,
+        last_started_at: selectedEnrichmentStatus.last_started_at,
+        last_error: selectedEnrichmentStatus.last_error,
+        next_run_at: selectedEnrichmentStatus.next_run_at,
+        last_success_at: selectedEnrichmentStatus.last_success_at,
+        freshness_state: selectedEnrichmentStatus.freshness_state,
+        freshness_age_seconds: selectedEnrichmentStatus.freshness_age_seconds
+      }
+    : undefined;
+
+  const visibleSourceStatuses = (sourcesQuery.data ?? [])
+    .filter(
+      (item) =>
+        item.source_name === "cisa-kev" ||
+        isIntelEnrichmentSourceName(item.source_name)
+    )
+    .map((item) =>
+      item.source_name === "cisa-kev"
+        ? {
+            ...item,
+            enabled: cisaMonitorQuery.data?.enabled ?? item.enabled,
+            schedule_seconds:
+              cisaMonitorQuery.data?.interval_seconds ?? item.schedule_seconds,
+            next_run_at: cisaMonitorQuery.data?.next_run_at ?? item.next_run_at
+          }
+        : item
+    );
+
+  function saveEnrichmentMonitor() {
+    if (!selectedEnrichmentSource) {
+      return;
+    }
+    const staleAfterSeconds =
+      enrichmentMonitorDraft.stale_after_seconds ??
+      defaultEnrichmentMonitorDraft.stale_after_seconds!;
+    const expireAfterSeconds =
+      enrichmentMonitorDraft.expire_after_seconds ??
+      defaultEnrichmentMonitorDraft.expire_after_seconds!;
+    if (expireAfterSeconds <= staleAfterSeconds) {
+      messageApi.error(t("数据失效阈值必须大于数据陈旧阈值"));
+      return;
+    }
+    enrichmentMonitorMutation.mutate({
+      sourceName: selectedEnrichmentSource,
+      values: {
+        enabled: enrichmentMonitorDraft.enabled,
+        schedule_seconds: enrichmentMonitorDraft.interval_seconds,
+        stale_after_seconds: staleAfterSeconds,
+        expire_after_seconds: expireAfterSeconds
+      }
+    });
+  }
+
   const collectActions = (
     <>
       <Button
@@ -581,6 +729,14 @@ export default function IntelCollectionPage() {
       )
     },
     {
+      title: t("自动采集"),
+      dataIndex: "enabled",
+      width: 100,
+      render: (value: boolean) => (
+        <Tag color={value ? "green" : "default"}>{value ? t("已启用") : t("已停用")}</Tag>
+      )
+    },
+    {
       title: t("最近状态"),
       dataIndex: "last_status",
       width: 120,
@@ -591,6 +747,20 @@ export default function IntelCollectionPage() {
       dataIndex: "last_started_at",
       width: 190,
       render: (value: string | null) => formatDateTime(value)
+    },
+    {
+      title: t("采集周期"),
+      dataIndex: "schedule_seconds",
+      width: 120,
+      render: (value: number | null) =>
+        value === null ? "-" : formatDurationSeconds(value)
+    },
+    {
+      title: t("数据新鲜度"),
+      dataIndex: "freshness_state",
+      width: 120,
+      render: (value: string | null) =>
+        value ? <Tag color={freshnessColor(value)}>{value}</Tag> : "-"
     },
     { title: t("原始事件"), dataIndex: "raw_event_count", width: 100 },
     { title: t("已处理"), dataIndex: "processed_event_count", width: 100 },
@@ -739,43 +909,31 @@ export default function IntelCollectionPage() {
                 <Select options={sourceOptions} />
               </Form.Item>
             </Col>
-            {selectedSource !== "watchvuln" ? (
-              <Col xs={24} sm={12} md={8} xl={5}>
-                <Form.Item
-                  label={t("单次采集数量")}
-                  name="limit"
-                  tooltip={singleCollectLimitTooltip(selectedSource)}
-                  rules={[
-                    {
-                      type: "number",
-                      min: 0,
-                      max: 5000,
-                      message: t("单次采集数量必须在 0 到 5000 之间")
-                    }
-                  ]}
-                >
-                  <InputNumber min={0} max={5000} style={{ width: "100%" }} />
-                </Form.Item>
-              </Col>
-            ) : null}
-            {selectedSource === "aliyun-avd" ? (
-              <Col xs={24} sm={12} md={8} xl={5}>
-                <Form.Item
-                  label={t("最低评分")}
-                  name="min_score"
-                  rules={[
-                    {
-                      type: "number",
-                      min: 0,
-                      max: 10,
-                      message: t("评分必须在 0 到 10 之间")
-                    }
-                  ]}
-                >
-                  <InputNumber min={0} max={10} step={0.1} style={{ width: "100%" }} />
-                </Form.Item>
-              </Col>
-            ) : null}
+            <Col xs={24} sm={12} md={8} xl={5}>
+              <Form.Item
+                label={t("单次采集数量")}
+                name="limit"
+                tooltip={singleCollectLimitTooltip(selectedSource)}
+                rules={[
+                  {
+                    type: "number",
+                    min: selectedSource === "cisa-kev" ? 0 : 1,
+                    max: 5000,
+                    message:
+                      selectedSource === "cisa-kev"
+                        ? t("单次采集数量必须在 0 到 5000 之间")
+                        : t("单次采集数量必须在 1 到 5000 之间")
+                  }
+                ]}
+              >
+                <InputNumber
+                  min={selectedSource === "cisa-kev" ? 0 : 1}
+                  max={5000}
+                  placeholder={isIntelEnrichmentSourceName(selectedSource) ? t("不限制") : undefined}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            </Col>
           </Row>
           {selectedSource === "cisa-kev" ? (
             <MonitorSettingsPanel
@@ -803,60 +961,24 @@ export default function IntelCollectionPage() {
               onRefresh={() => void cisaMonitorQuery.refetch()}
             />
           ) : null}
-          {selectedSource === "watchvuln" ? (
+          {selectedEnrichmentSource ? (
             <MonitorSettingsPanel
-              hint={t("WatchVuln 当前只接入各子源的新漏洞告警与高价值记录，不作为历史漏洞全量拉取入口。")}
-              data={watchVulnMonitorQuery.data}
-              isError={watchVulnMonitorQuery.isError}
-              error={watchVulnMonitorQuery.error}
-              isFetching={watchVulnMonitorQuery.isFetching}
-              isSaving={watchVulnMonitorMutation.isPending}
-              draft={watchVulnMonitorDraft}
-              minInterval={60}
-              maxInterval={86400}
-              onDraftChange={setWatchVulnMonitorDraft}
+              hint={enrichmentSourceHints[selectedEnrichmentSource]}
+              data={enrichmentMonitorData}
+              isError={sourcesQuery.isError}
+              error={sourcesQuery.error}
+              isFetching={sourcesQuery.isFetching}
+              isSaving={enrichmentMonitorMutation.isPending}
+              draft={enrichmentMonitorDraft}
+              minInterval={300}
+              maxInterval={2592000}
+              showLimit={false}
+              showFreshnessThresholds
+              onDraftChange={setEnrichmentMonitorDraft}
               actions={collectActions}
-              onSave={() =>
-                watchVulnMonitorMutation.mutate({
-                  enabled: watchVulnMonitorDraft.enabled,
-                  interval_seconds: watchVulnMonitorDraft.interval_seconds,
-                  limit: watchVulnMonitorDraft.limit ?? null
-                })
-              }
-              onRefresh={() => void watchVulnMonitorQuery.refetch()}
-              extra={
-                <Table
-                  rowKey="source"
-                  size="small"
-                  columns={[
-                    {
-                      title: t("子源"),
-                      dataIndex: "source",
-                      width: 130
-                    },
-                    {
-                      title: t("告警级别"),
-                      dataIndex: "level",
-                      width: 120
-                    },
-                    {
-                      title: t("进入条件"),
-                      dataIndex: "rule"
-                    }
-                  ]}
-                  dataSource={watchVulnScopeRows}
-                  pagination={false}
-                  scroll={{ x: 520 }}
-                />
-              }
+              onSave={saveEnrichmentMonitor}
+              onRefresh={() => void sourcesQuery.refetch()}
             />
-          ) : null}
-          {selectedSource === "aliyun-avd" ? (
-            <div className="intel-collect-action-bar">
-              <Space className="form-actions" size={8} wrap>
-                {collectActions}
-              </Space>
-            </div>
           ) : null}
         </Form>
       </Card>
@@ -867,10 +989,10 @@ export default function IntelCollectionPage() {
           storageKey="intel-sources"
           rowKey="source_name"
           columns={sourceColumns}
-          dataSource={sourcesQuery.data ?? []}
+          dataSource={visibleSourceStatuses}
           loading={sourcesQuery.isFetching}
           pagination={false}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1520 }}
         />
       </Card>
 

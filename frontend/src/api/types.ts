@@ -1130,6 +1130,19 @@ export interface IntelCollectRequest {
   latest_only?: boolean;
 }
 
+export interface IntelEnrichmentCollectRequest {
+  limit?: number | null;
+  async_mode: boolean;
+  force_baseline?: boolean;
+}
+
+export interface IntelEnrichmentSourceConfigUpdate {
+  enabled?: boolean | null;
+  schedule_seconds?: number | null;
+  stale_after_seconds?: number | null;
+  expire_after_seconds?: number | null;
+}
+
 export interface WatchVulnMonitorConfig {
   enabled: boolean;
   interval_seconds: number;
@@ -1232,6 +1245,19 @@ export interface IntelSourceStatus {
   processed_event_count: number;
   failed_event_count: number;
   vulnerability_count: number;
+  update_mode: string | null;
+  schedule_seconds: number | null;
+  stale_after_seconds: number | null;
+  expire_after_seconds: number | null;
+  parser_version: string | null;
+  supports_cursor: boolean;
+  supports_deletions: boolean;
+  active_generation_id: string | null;
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  next_run_at: string | null;
+  freshness_state: string | null;
+  freshness_age_seconds: number | null;
 }
 
 export interface IntelNormalizationQuality {

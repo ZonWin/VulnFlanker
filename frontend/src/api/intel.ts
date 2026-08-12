@@ -5,6 +5,8 @@ import type {
   IntelCollectionResult,
   IntelCollectionRun,
   IntelCollectRequest,
+  IntelEnrichmentCollectRequest,
+  IntelEnrichmentSourceConfigUpdate,
   IntelRawEvent,
   IntelRawEventNormalizeResult,
   IntelSourceVulnerabilityCleanupResult,
@@ -14,6 +16,23 @@ import type {
 } from "@/api/types";
 
 export type IntelManualSourceName = "cisa-kev" | "aliyun-avd" | "watchvuln";
+
+export const intelEnrichmentSourceNames = [
+  "cve-list-v5",
+  "nvd",
+  "canonical-ubuntu",
+  "debian-security-tracker",
+  "redhat-csaf"
+] as const;
+
+export type IntelEnrichmentSourceName = (typeof intelEnrichmentSourceNames)[number];
+export type IntelVisibleSourceName = "cisa-kev" | IntelEnrichmentSourceName;
+
+export function isIntelEnrichmentSourceName(
+  sourceName: string
+): sourceName is IntelEnrichmentSourceName {
+  return intelEnrichmentSourceNames.includes(sourceName as IntelEnrichmentSourceName);
+}
 
 export function collectIntelSource(sourceName: IntelManualSourceName, body: IntelCollectRequest) {
   return request<IntelCollectionResult>(`/api/v1/intel/${sourceName}/collect`, {
@@ -46,6 +65,32 @@ export function updateWatchVulnMonitorConfig(body: WatchVulnMonitorConfigUpdate)
 
 export function getIntelSources() {
   return request<IntelSourceStatus[]>("/api/v1/intel/sources");
+}
+
+export function updateIntelEnrichmentSourceConfig(
+  sourceName: IntelEnrichmentSourceName,
+  body: IntelEnrichmentSourceConfigUpdate
+) {
+  return request<IntelSourceStatus>(
+    `/api/v1/intel/sources/${encodeURIComponent(sourceName)}`,
+    {
+      method: "PATCH",
+      body
+    }
+  );
+}
+
+export function collectIntelEnrichmentSource(
+  sourceName: IntelEnrichmentSourceName,
+  body: IntelEnrichmentCollectRequest
+) {
+  return request<IntelCollectionResult>(
+    `/api/v1/intel/sources/${encodeURIComponent(sourceName)}/collect`,
+    {
+      method: "POST",
+      body
+    }
+  );
 }
 
 export function clearIntelSourceVulnerabilities(sourceName: string) {

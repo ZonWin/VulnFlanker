@@ -31,8 +31,12 @@ import {
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 
-import type { IntelManualSourceName } from "@/api/intel";
-import { collectIntelSource } from "@/api/intel";
+import type { IntelVisibleSourceName } from "@/api/intel";
+import {
+  collectIntelEnrichmentSource,
+  collectIntelSource,
+  isIntelEnrichmentSourceName
+} from "@/api/intel";
 import { createVerificationTask, reevaluateMatchResult } from "@/api/matchResults";
 import { getTaskCenterItems, getTaskCenterSummary } from "@/api/taskCenter";
 import type {
@@ -78,8 +82,11 @@ const sourceOptions = [
   { label: t("风险队列"), value: "risk-queue" },
   { label: t("AI 补全"), value: "ai-enrichment" },
   { label: "CISA KEV", value: "cisa-kev" },
-  { label: t("阿里云漏洞库"), value: "aliyun-avd" },
-  { label: "WatchVuln", value: "watchvuln" }
+  { label: "CVE List V5", value: "cve-list-v5" },
+  { label: "NVD", value: "nvd" },
+  { label: "Canonical Ubuntu Security", value: "canonical-ubuntu" },
+  { label: "Debian Security Tracker", value: "debian-security-tracker" },
+  { label: "Red Hat CSAF VEX", value: "redhat-csaf" }
 ];
 
 const triggerOptions = [
@@ -89,10 +96,13 @@ const triggerOptions = [
   { label: t("系统"), value: "system" }
 ];
 
-const manualIntelSources: IntelManualSourceName[] = [
+const visibleIntelSources: IntelVisibleSourceName[] = [
   "cisa-kev",
-  "aliyun-avd",
-  "watchvuln"
+  "cve-list-v5",
+  "nvd",
+  "canonical-ubuntu",
+  "debian-security-tracker",
+  "redhat-csaf"
 ];
 
 function normalizeFilters(values: TaskCenterItemsQuery): TaskCenterItemsQuery {
@@ -141,8 +151,8 @@ function statusGroupLabel(value: TaskCenterStatusGroup) {
   return labels[value];
 }
 
-function canCollectSource(source?: string | null): source is IntelManualSourceName {
-  return manualIntelSources.includes(source as IntelManualSourceName);
+function canCollectSource(source?: string | null): source is IntelVisibleSourceName {
+  return visibleIntelSources.includes(source as IntelVisibleSourceName);
 }
 
 function riskPriorityValue(value?: string | null): RiskPriority {
@@ -237,12 +247,18 @@ export default function TaskCenterPage() {
   });
 
   const collectMutation = useMutation({
-    mutationFn: (sourceName: IntelManualSourceName) =>
-      collectIntelSource(sourceName, {
-        async_mode: true,
-        limit: sourceName === "watchvuln" ? null : 100,
-        min_score: sourceName === "aliyun-avd" ? 7 : null
-      }),
+    mutationFn: (sourceName: IntelVisibleSourceName) =>
+      isIntelEnrichmentSourceName(sourceName)
+        ? collectIntelEnrichmentSource(sourceName, {
+            async_mode: true,
+            limit: 100,
+            force_baseline: false
+          })
+        : collectIntelSource(sourceName, {
+            async_mode: true,
+            limit: 100,
+            latest_only: true
+          }),
     onSuccess: (result) => {
       messageApi.success(result.message ?? t("情报采集任务已提交"));
       invalidateTaskData();
@@ -522,12 +538,6 @@ export default function TaskCenterPage() {
         title={t("任务中心")}
         extra={
           <Space wrap>
-            <Button
-              icon={<DownloadCloud size={16} />}
-              onClick={() => collectMutation.mutate("watchvuln")}
-              loading={collectMutation.isPending}
-            >
-              {t("采集 WatchVuln")}</Button>
             <Button
               icon={<RefreshCw size={16} />}
               onClick={() => {

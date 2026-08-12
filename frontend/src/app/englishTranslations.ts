@@ -1381,6 +1381,25 @@ export const englishTranslations: Record<string,string> = {
   "CERT 验证、POC/EXP 或技术细节公开": "CERT 验证、POC/EXP 或技术细节公开",
   "CISA KEV 定时采集默认全量拉取 CISA KEV 官方目录，并按 CVE 与已有漏洞库比对；已存在条目会更新同一来源记录，新条目会补入。": "CISA KEV 定时采集默认全量拉取 CISA KEV 官方目录，并按 CVE 与已有漏洞库比对；已存在条目会更新同一来源记录，新条目会补入。",
   "CISA KEV 定时采集设置已更新": "CISA KEV 定时采集设置已更新",
-  "CISA KEV 手动采集默认仅采集本地最新 dateAdded 水位之后的新增漏洞；本地无水位时按此数量采集最新窗口。填 0 表示全量采集历史目录。": "CISA KEV 手动采集默认仅采集本地最新 dateAdded 水位之后的新增漏洞；本地无水位时按此数量采集最新窗口。填 0 表示全量采集历史目录。"
+  "CISA KEV 手动采集默认仅采集本地最新 dateAdded 水位之后的新增漏洞；本地无水位时按此数量采集最新窗口。填 0 表示全量采集历史目录。": "Manual CISA KEV collection normally fetches entries newer than the latest local dateAdded watermark. Without a local watermark, it collects the latest window up to this limit. Enter 0 to collect the full historical catalog.",
+  "CVE 官方记录源，用于补全通用漏洞描述、产品与版本范围。": "The official CVE record source enriches general descriptions, products, and version ranges.",
+  "NVD 补充通用漏洞元数据、CPE 与版本范围；自动采集按最近修改窗口增量更新。": "NVD enriches general vulnerability metadata, CPEs, and version ranges. Scheduled collection updates incrementally by the recently modified window.",
+  "Canonical Ubuntu 官方安全数据，用于补全 Ubuntu 发行版、软件包状态与修复版本。": "Canonical's official Ubuntu security data enriches Ubuntu releases, package status, and fixed versions.",
+  "Debian Security Tracker 用于补全 Debian 发行版、软件包状态与修复版本。": "Debian Security Tracker enriches Debian releases, package status, and fixed versions.",
+  "Red Hat CSAF VEX 用于补全 RHEL 产品、软件包状态与修复版本。": "Red Hat CSAF VEX enriches RHEL products, package status, and fixed versions.",
+  "留空表示不限制数量，采集器会尽可能拉取当前来源可返回的记录。": "Leave blank for no item limit; the collector will fetch as many records as the source can return.",
+  "留空表示定时采集不限制单次数量。": "Leave blank to run scheduled collection without a per-run item limit.",
+  "数据陈旧阈值": "Stale data threshold",
+  "数据失效阈值": "Expired data threshold",
+  "数据新鲜度": "Data freshness",
+  "数据年龄": "Data age",
+  "最近成功": "Last success",
+  "采集周期": "Collection interval",
+  "已启用": "Enabled",
+  "已停用": "Disabled",
+  "{{v0}} 自动采集设置已更新": "Scheduled collection settings for {{v0}} were updated.",
+  "自动采集设置更新失败": "Failed to update scheduled collection settings.",
+  "数据失效阈值必须大于数据陈旧阈值": "The expired data threshold must be greater than the stale data threshold.",
+  "单次采集数量必须在 1 到 5000 之间": "The per-run collection limit must be between 1 and 5000."
 };
 
