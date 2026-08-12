@@ -147,7 +147,24 @@ def _nvd_cve(cve_id: str = "CVE-2026-9100") -> dict:
                         ],
                     },
                 ]
-            }
+            },
+            {
+                "nodes": [
+                    {
+                        "operator": "OR",
+                        "negate": False,
+                        "cpeMatch": [
+                            {
+                                "vulnerable": True,
+                                "criteria": "cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*",
+                                "versionStartIncluding": "1.0.0",
+                                "versionEndExcluding": "2.0.0",
+                                "matchCriteriaId": "DUPLICATE-OR-MATCH",
+                            }
+                        ],
+                    }
+                ]
+            },
         ],
     }
 
@@ -317,6 +334,10 @@ def test_nvd_mapper_preserves_logic_tree_and_skips_and_scope() -> None:
     assert normalized.scopes[0].product == "widget"
     assert normalized.scopes[0].affected_versions == ">= 1.0.0, < 2.0.0"
     assert normalized.scopes[0].provenance["match_criteria_id"] == "OR-MATCH"
+    assert {
+        item["match_criteria_id"]
+        for item in normalized.scopes[0].provenance["equivalent_matches"]
+    } == {"OR-MATCH", "DUPLICATE-OR-MATCH"}
 
 
 def test_cve_and_nvd_collect_independently_of_kev_and_merge_by_field(db_session) -> None:

@@ -113,56 +113,49 @@ def normalize_enrichment_page(
         )
         if raw_event is None:
             raise ValueError(f"staged raw event not found: {raw_record.external_id}")
-        try:
-            normalized = mapper.map_record(raw_record)
-            vulnerability = db.scalar(
-                select(Vulnerability).where(
-                    Vulnerability.canonical_id == normalized.canonical_id
-                )
+        normalized = mapper.map_record(raw_record)
+        vulnerability = db.scalar(
+            select(Vulnerability).where(
+                Vulnerability.canonical_id == normalized.canonical_id
             )
-            if vulnerability is None:
-                vulnerability = Vulnerability(
-                    canonical_id=normalized.canonical_id,
-                    title=normalized.title or normalized.canonical_id,
-                    description=None,
-                    staging_generation_id=run.generation_id,
-                )
-                db.add(vulnerability)
-                db.flush()
+        )
+        if vulnerability is None:
+            vulnerability = Vulnerability(
+                canonical_id=normalized.canonical_id,
+                title=normalized.title or normalized.canonical_id,
+                description=None,
+                staging_generation_id=run.generation_id,
+            )
+            db.add(vulnerability)
+            db.flush()
 
-            upsert_source_contribution(
-                db,
-                run=run,
-                vulnerability_id=vulnerability.id,
-                external_key=raw_record.external_id,
-                contribution=normalized.contribution,
-                provenance={
-                    **normalized.provenance,
-                    "raw_event_id": raw_event.id,
-                    "source_url": raw_record.source_url,
-                    "parser_version": run.parser_version,
-                },
-                raw_event_id=raw_event.id,
-            )
-            _replace_staged_scopes(
-                db,
-                run=run,
-                raw_event=raw_event,
-                vulnerability=vulnerability,
-                scopes=normalized.scopes,
-            )
-            raw_event.processing_status = "processed"
-            raw_event.processed_at = utcnow()
-            raw_event.vulnerability_id = vulnerability.id
-            raw_event.last_error = None
-            run.processed_count += 1
-            db.add_all((raw_event, run))
-        except Exception as exc:
-            raw_event.processing_status = "failed"
-            raw_event.last_error = str(exc)[:4000]
-            run.failed_count += 1
-            db.add_all((raw_event, run))
-            raise
+        upsert_source_contribution(
+            db,
+            run=run,
+            vulnerability_id=vulnerability.id,
+            external_key=raw_record.external_id,
+            contribution=normalized.contribution,
+            provenance={
+                **normalized.provenance,
+                "raw_event_id": raw_event.id,
+                "source_url": raw_record.source_url,
+                "parser_version": run.parser_version,
+            },
+            raw_event_id=raw_event.id,
+        )
+        _replace_staged_scopes(
+            db,
+            run=run,
+            raw_event=raw_event,
+            vulnerability=vulnerability,
+            scopes=normalized.scopes,
+        )
+        raw_event.processing_status = "processed"
+        raw_event.processed_at = utcnow()
+        raw_event.vulnerability_id = vulnerability.id
+        raw_event.last_error = None
+        run.processed_count += 1
+        db.add_all((raw_event, run))
     db.flush()
 
 
@@ -245,38 +238,23 @@ def _replace_staged_scopes(
             VulnerabilityAffectedScope.raw_event_id == raw_event.id,
         )
     )
+    seen_scope_keys: set[str] = set()
     for scope in scopes:
-        fact = {
-            "vendor": scope.vendor,
-            "product": scope.product,
-            "ecosystem": scope.ecosystem,
-            "distro": scope.distro,
-            "distro_release": scope.distro_release,
-            "source_package": scope.source_package,
-            "binary_package": scope.binary_package,
-            "architecture": scope.architecture,
-            "flavor": scope.flavor,
-            "version_scheme": scope.version_scheme,
-            "version_type": scope.version_type,
-            "status": scope.status,
-            "default_status": scope.default_status,
-            "cpe": scope.cpe,
-            "purl": scope.purl,
-            "platforms": scope.platforms,
-            "structured_versions": scope.structured_versions,
-            "affected_versions": scope.affected_versions,
-            "fixed_versions": scope.fixed_versions,
-        }
+        fact = enrichment_scope_fact(scope)
         fingerprint = compute_fact_fingerprint(fact)
+        scope_key = sha256(
+            f"{raw_event.external_key}\x1f{fingerprint}".encode("utf-8")
+        ).hexdigest()
+        if scope_key in seen_scope_keys:
+            continue
+        seen_scope_keys.add(scope_key)
         db.add(
             VulnerabilityAffectedScope(
                 vulnerability_id=vulnerability.id,
                 raw_event_id=raw_event.id,
                 source_name=run.source_name,
                 generation_id=run.generation_id,
-                scope_key=sha256(
-                    f"{raw_event.external_key}\x1f{fingerprint}".encode("utf-8")
-                ).hexdigest(),
+                scope_key=scope_key,
                 vendor=scope.vendor,
                 product=scope.product,
                 ecosystem=scope.ecosystem,
@@ -304,6 +282,30 @@ def _replace_staged_scopes(
                 is_active=False,
             )
         )
+
+
+def enrichment_scope_fact(scope: EnrichmentScope) -> dict[str, Any]:
+    return {
+        "vendor": scope.vendor,
+        "product": scope.product,
+        "ecosystem": scope.ecosystem,
+        "distro": scope.distro,
+        "distro_release": scope.distro_release,
+        "source_package": scope.source_package,
+        "binary_package": scope.binary_package,
+        "architecture": scope.architecture,
+        "flavor": scope.flavor,
+        "version_scheme": scope.version_scheme,
+        "version_type": scope.version_type,
+        "status": scope.status,
+        "default_status": scope.default_status,
+        "cpe": scope.cpe,
+        "purl": scope.purl,
+        "platforms": scope.platforms,
+        "structured_versions": scope.structured_versions,
+        "affected_versions": scope.affected_versions,
+        "fixed_versions": scope.fixed_versions,
+    }
 
 
 def _materialize_merged_fields(

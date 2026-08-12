@@ -4,7 +4,12 @@ from typing import Any
 
 from app.connectors.base import RawIntelRecord
 from app.connectors.http_client import SourceDownloadError
-from app.services.intel_enrichment import EnrichmentRecord, EnrichmentScope
+from app.services.intel_enrichment import (
+    EnrichmentRecord,
+    EnrichmentScope,
+    enrichment_scope_fact,
+)
+from app.services.intel_generations import compute_fact_fingerprint
 
 
 class NvdCveMapper:
@@ -65,7 +70,24 @@ def _nvd_cpe_scopes(configurations: list[Any]) -> list[EnrichmentScope]:
                     constrained=False,
                 )
             )
-    return scopes
+    return _deduplicate_scopes(scopes)
+
+
+def _deduplicate_scopes(scopes: list[EnrichmentScope]) -> list[EnrichmentScope]:
+    unique: dict[str, EnrichmentScope] = {}
+    for scope in scopes:
+        fingerprint = compute_fact_fingerprint(enrichment_scope_fact(scope))
+        existing = unique.get(fingerprint)
+        if existing is None:
+            scope.provenance = {
+                **scope.provenance,
+                "equivalent_matches": [dict(scope.provenance)],
+            }
+            unique[fingerprint] = scope
+            continue
+        matches = existing.provenance.setdefault("equivalent_matches", [])
+        matches.append(dict(scope.provenance))
+    return list(unique.values())
 
 
 def _scopes_from_node(
