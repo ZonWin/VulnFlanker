@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any, Callable
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.orm import Session
 
 from app.connectors.base import CollectorPage, VulnerabilitySourceConnector
@@ -13,7 +13,12 @@ from app.db.models import (
     IntelCollectionRun,
     IntelRawEvent,
     IntelSourceConfig,
+    MatchResult,
+    Vulnerability,
     VulnerabilityAffectedScope,
+    VulnerabilityAIEnrichment,
+    VulnerabilityReviewResolution,
+    VulnerabilitySource,
     VulnerabilitySourceContribution,
 )
 from app.services.intel_ingestion import compute_payload_hash
@@ -262,6 +267,11 @@ def activate_generation(db: Session, run: IntelCollectionRun) -> IntelCollection
             )
             .values(is_active=True)
         )
+        db.execute(
+            update(Vulnerability)
+            .where(Vulnerability.staging_generation_id == run.generation_id)
+            .values(staging_generation_id=None)
+        )
         if previous_generation_id and previous_generation_id != run.generation_id:
             previous_run = db.scalar(
                 select(IntelCollectionRun).where(
@@ -283,6 +293,61 @@ def activate_generation(db: Session, run: IntelCollectionRun) -> IntelCollection
         db.add_all((run, config))
         db.flush()
     return run
+
+
+def purge_failed_generation(db: Session, run: IntelCollectionRun) -> int:
+    """Remove staged generation data without touching pre-existing vulnerabilities."""
+    generation_id = run.generation_id
+    if not generation_id:
+        return 0
+
+    db.execute(
+        delete(VulnerabilityAffectedScope).where(
+            VulnerabilityAffectedScope.generation_id == generation_id
+        )
+    )
+    db.execute(
+        delete(VulnerabilitySourceContribution).where(
+            VulnerabilitySourceContribution.generation_id == generation_id
+        )
+    )
+    db.execute(
+        delete(IntelRawEvent).where(IntelRawEvent.generation_id == generation_id)
+    )
+
+    removable = (
+        delete(Vulnerability)
+        .where(Vulnerability.staging_generation_id == generation_id)
+        .where(~exists().where(VulnerabilitySource.vulnerability_id == Vulnerability.id))
+        .where(
+            ~exists().where(
+                VulnerabilitySourceContribution.vulnerability_id == Vulnerability.id
+            )
+        )
+        .where(
+            ~exists().where(
+                VulnerabilityAffectedScope.vulnerability_id == Vulnerability.id
+            )
+        )
+        .where(~exists().where(MatchResult.vulnerability_id == Vulnerability.id))
+        .where(
+            ~exists().where(
+                VulnerabilityAIEnrichment.vulnerability_id == Vulnerability.id
+            )
+        )
+        .where(
+            ~exists().where(
+                VulnerabilityReviewResolution.vulnerability_id == Vulnerability.id
+            )
+        )
+    )
+    result = db.execute(removable)
+    db.execute(
+        update(Vulnerability)
+        .where(Vulnerability.staging_generation_id == generation_id)
+        .values(staging_generation_id=None)
+    )
+    return int(result.rowcount or 0)
 
 
 def fail_generation(
@@ -343,6 +408,7 @@ def collect_generation(
         db.rollback()
         run = db.get(IntelCollectionRun, run.id)
         if run is not None:
+            purge_failed_generation(db, run)
             fail_generation(db, run, exc)
             db.commit()
         raise

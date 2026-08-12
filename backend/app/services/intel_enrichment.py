@@ -125,6 +125,7 @@ def normalize_enrichment_page(
                     canonical_id=normalized.canonical_id,
                     title=normalized.title or normalized.canonical_id,
                     description=None,
+                    staging_generation_id=run.generation_id,
                 )
                 db.add(vulnerability)
                 db.flush()

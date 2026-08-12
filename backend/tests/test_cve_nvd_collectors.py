@@ -19,6 +19,7 @@ from app.connectors.http_client import SourceDownloadError
 from app.connectors.nvd import NvdCveConnector, nvd_modified_window, parse_nvd_page
 from app.db.base import utcnow
 from app.db.models import (
+    IntelRawEvent,
     IntelSourceConfig,
     Vulnerability,
     VulnerabilityAffectedScope,
@@ -435,3 +436,48 @@ def test_nvd_limit_does_not_activate_partial_window(db_session) -> None:
             VulnerabilityAffectedScope.is_active.is_(True),
         )
     ).all() == []
+    assert db_session.scalar(
+        select(Vulnerability).where(Vulnerability.canonical_id == "CVE-2026-9200")
+    ) is None
+    assert db_session.scalars(
+        select(IntelRawEvent).where(IntelRawEvent.provider == "nvd")
+    ).all() == []
+    assert db_session.scalars(
+        select(VulnerabilitySourceContribution).where(
+            VulnerabilitySourceContribution.source_name == "nvd"
+        )
+    ).all() == []
+
+
+def test_failed_generation_preserves_preexisting_vulnerability(db_session) -> None:
+    existing = Vulnerability(
+        canonical_id="CVE-2026-9201",
+        title="Existing vulnerability",
+    )
+    db_session.add(existing)
+    db_session.commit()
+    payload = {
+        "resultsPerPage": 1,
+        "startIndex": 0,
+        "totalResults": 2,
+        "vulnerabilities": [{"cve": _nvd_cve("CVE-2026-9201")}],
+    }
+    connector = NvdCveConnector(page_size=1, get_json=lambda *_args, **_kwargs: payload)
+
+    with pytest.raises(Exception, match="complete terminal page"):
+        collect_enrichment_source(
+            db_session,
+            connector=connector,
+            mapper=NvdCveMapper(),
+            start="2026-08-01T00:00:00Z",
+            end="2026-08-04T00:00:00Z",
+            limit=1,
+        )
+
+    db_session.expire_all()
+    preserved = db_session.scalar(
+        select(Vulnerability).where(Vulnerability.canonical_id == "CVE-2026-9201")
+    )
+    assert preserved is not None
+    assert preserved.title == "Existing vulnerability"
+    assert preserved.staging_generation_id is None
