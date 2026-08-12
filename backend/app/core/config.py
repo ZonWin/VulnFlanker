@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     cve_list_release_api_url: str = (
         "https://api.github.com/repos/CVEProject/cvelistV5/releases/latest"
     )
+    cve_list_release_page_url: str = (
+        "https://github.com/CVEProject/cvelistV5/releases/latest"
+    )
+    cve_list_github_token: str | None = None
     cve_list_delta_log_url: str = (
         "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/deltaLog.json"
     )

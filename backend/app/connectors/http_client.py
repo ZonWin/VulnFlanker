@@ -51,6 +51,21 @@ class SecureSourceHttpClient:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SourceDownloadError(f"source returned invalid JSON: {url}") from exc
 
+    def get_text(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        max_bytes: int = 8 * 1024 * 1024,
+    ) -> str:
+        response = self._open(url, headers=headers)
+        with response:
+            payload = _read_bounded(response, max_bytes)
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SourceDownloadError(f"source returned invalid UTF-8: {url}") from exc
+
     def download(
         self,
         url: str,

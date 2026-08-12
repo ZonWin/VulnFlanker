@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from collections.abc import Callable, Iterator
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Any, BinaryIO
+from urllib.parse import urljoin, urlparse
 
 from app.connectors.base import (
     CollectorMetadata,
@@ -29,14 +32,23 @@ class CveListV5Connector(VulnerabilitySourceConnector):
         self,
         *,
         release_api_url: str | None = None,
+        release_page_url: str | None = None,
+        github_token: str | None = None,
         delta_log_url: str | None = None,
         page_size: int | None = None,
         timeout: int | None = None,
         get_json: Callable[..., Any] | None = None,
+        get_text: Callable[..., str] | None = None,
         download_artifact: Callable[[str], tuple[BinaryIO, str]] | None = None,
     ) -> None:
         settings = get_settings()
         self.release_api_url = release_api_url or settings.cve_list_release_api_url
+        self.release_page_url = (
+            release_page_url or settings.cve_list_release_page_url
+        )
+        self.github_token = (
+            github_token if github_token is not None else settings.cve_list_github_token
+        )
         self.delta_log_url = delta_log_url or settings.cve_list_delta_log_url
         self.page_size = page_size or settings.cve_list_page_size
         client = SecureSourceHttpClient(
@@ -50,6 +62,7 @@ class CveListV5Connector(VulnerabilitySourceConnector):
             timeout=timeout or settings.cve_list_timeout_seconds,
         )
         self.get_json = get_json or client.get_json
+        self.get_text = get_text or client.get_text
         self.download_artifact = download_artifact or client.download
 
     @property
@@ -94,8 +107,7 @@ class CveListV5Connector(VulnerabilitySourceConnector):
         yield from self._fetch_baseline(limit=limit)
 
     def _fetch_baseline(self, *, limit: int | None) -> Iterator[CollectorPage]:
-        release = self.get_json(self.release_api_url)
-        artifact_url, artifact_name = select_cve_baseline_asset(release)
+        artifact_url, artifact_name = self._discover_baseline_asset()
         artifact, artifact_hash = self.download_artifact(artifact_url)
         fetched_at = utcnow()
         emitted = 0
@@ -146,6 +158,22 @@ class CveListV5Connector(VulnerabilitySourceConnector):
                 "truncated": truncated,
             },
         )
+
+    def _discover_baseline_asset(self) -> tuple[str, str]:
+        headers = {"Authorization": f"Bearer {self.github_token}"} if self.github_token else None
+        try:
+            release = self.get_json(self.release_api_url, headers=headers)
+            return select_cve_baseline_asset(release)
+        except SourceDownloadError:
+            try:
+                return discover_cve_baseline_from_release_page(
+                    self.release_page_url,
+                    get_text=self.get_text,
+                )
+            except SourceDownloadError as page_error:
+                raise SourceDownloadError(
+                    "CVE baseline discovery failed via GitHub API and release page"
+                ) from page_error
 
     def _fetch_delta(
         self,
@@ -209,12 +237,69 @@ def select_cve_baseline_asset(release: Any) -> tuple[str, str]:
             continue
         name = str(asset.get("name") or "")
         url = str(asset.get("browser_download_url") or "")
-        if name.endswith("_all_CVEs_at_midnight.zip") and url:
+        if re.search(r"_all_CVEs_at_midnight\.zip(?:\.zip)?$", name) and url:
             candidates.append((name, url))
     if not candidates:
         raise SourceDownloadError("CVE release has no daily baseline asset")
     name, url = sorted(candidates)[-1]
     return url, name
+
+
+def discover_cve_baseline_from_release_page(
+    release_page_url: str,
+    *,
+    get_text: Callable[..., str],
+) -> tuple[str, str]:
+    release_html = get_text(release_page_url)
+    release_links = _html_links(release_html)
+    expanded_path = next(
+        (
+            link
+            for link in release_links
+            if link.startswith("/CVEProject/cvelistV5/releases/expanded_assets/")
+        ),
+        None,
+    )
+    if not expanded_path:
+        raise SourceDownloadError("CVE release page has no expanded asset list")
+    expanded_url = urljoin(release_page_url, expanded_path)
+    expanded_html = get_text(expanded_url)
+    candidates: list[tuple[str, str]] = []
+    for link in _html_links(expanded_html):
+        name = link.rstrip("/").split("/")[-1]
+        if not re.search(r"_all_CVEs_at_midnight\.zip(?:\.zip)?$", name):
+            continue
+        artifact_url = urljoin(expanded_url, link)
+        parsed = urlparse(artifact_url)
+        if parsed.scheme == "https" and parsed.hostname == "github.com":
+            candidates.append((name, artifact_url))
+    if not candidates:
+        raise SourceDownloadError("CVE release page has no daily baseline asset")
+    name, url = sorted(candidates)[-1]
+    return url, name
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href")
+        if href:
+            self.links.append(href)
+
+
+def _html_links(payload: str) -> list[str]:
+    parser = _LinkParser()
+    parser.feed(payload)
+    return parser.links
 
 
 def safe_cve_zip_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:

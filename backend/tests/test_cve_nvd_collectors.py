@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.connectors.cve_list_v5 import (
     CveDeltaCursorExpired,
     CveListV5Connector,
+    discover_cve_baseline_from_release_page,
     safe_cve_zip_members,
     select_cve_baseline_asset,
     select_cve_delta_changes,
@@ -200,6 +201,70 @@ def test_cve_release_selects_daily_baseline() -> None:
 
     assert name == "2026-08-11_all_CVEs_at_midnight.zip"
     assert url == "https://github.com/baseline.zip"
+
+
+def test_cve_release_accepts_upstream_double_zip_name() -> None:
+    url, name = select_cve_baseline_asset(
+        {
+            "assets": [
+                {
+                    "name": "2026-08-12_all_CVEs_at_midnight.zip.zip",
+                    "browser_download_url": "https://github.com/baseline.zip.zip",
+                }
+            ]
+        }
+    )
+
+    assert name.endswith(".zip.zip")
+    assert url == "https://github.com/baseline.zip.zip"
+
+
+def test_cve_release_page_fallback_discovers_baseline() -> None:
+    pages = {
+        "https://github.com/CVEProject/cvelistV5/releases/latest": (
+            '<a href="/CVEProject/cvelistV5/releases/expanded_assets/cve_2026-08-12_0600Z">Assets</a>'
+        ),
+        "https://github.com/CVEProject/cvelistV5/releases/expanded_assets/cve_2026-08-12_0600Z": (
+            '<a href="/CVEProject/cvelistV5/releases/download/cve_2026-08-12_0600Z/'
+            '2026-08-12_all_CVEs_at_midnight.zip.zip">baseline</a>'
+        ),
+    }
+
+    url, name = discover_cve_baseline_from_release_page(
+        "https://github.com/CVEProject/cvelistV5/releases/latest",
+        get_text=lambda url: pages[url],
+    )
+
+    assert name == "2026-08-12_all_CVEs_at_midnight.zip.zip"
+    assert url.startswith("https://github.com/CVEProject/cvelistV5/releases/download/")
+
+
+def test_cve_connector_falls_back_when_github_api_is_rate_limited() -> None:
+    record_payload = _cve_record()
+    pages = {
+        "https://github.com/CVEProject/cvelistV5/releases/latest": (
+            '<a href="/CVEProject/cvelistV5/releases/expanded_assets/tag">Assets</a>'
+        ),
+        "https://github.com/CVEProject/cvelistV5/releases/expanded_assets/tag": (
+            '<a href="/CVEProject/cvelistV5/releases/download/tag/'
+            '2026-08-12_all_CVEs_at_midnight.zip">baseline</a>'
+        ),
+    }
+
+    connector = CveListV5Connector(
+        get_json=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SourceDownloadError("rate limited")
+        ),
+        get_text=lambda url: pages[url],
+        download_artifact=lambda _url: (
+            io.BytesIO(_baseline_zip(record_payload)),
+            "artifact-hash",
+        ),
+    )
+
+    page = next(connector.fetch_pages(limit=1))
+
+    assert page.records[0].external_id == "CVE-2026-9100"
 
 
 def test_cve_delta_deduplicates_latest_change_and_detects_cursor_gap() -> None:
