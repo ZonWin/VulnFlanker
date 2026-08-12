@@ -81,6 +81,13 @@ def test_generic_collection_api_queues_registered_source(client, monkeypatch) ->
     assert response.status_code == 200
     assert response.json()["task_id"] == "enrichment-task-1"
     assert captured == [("redhat-csaf", "manual", None, True)]
+    limited = client.post(
+        "/api/v1/intel/sources/canonical-ubuntu/collect",
+        json={"async_mode": True, "limit": 100},
+    )
+    assert limited.status_code == 400
+    assert "without a record limit" in limited.json()["detail"]
+    assert captured == [("redhat-csaf", "manual", None, True)]
     assert client.post(
         "/api/v1/intel/sources/nvd/collect",
         json={"async_mode": True, "force_baseline": True},

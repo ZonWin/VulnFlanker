@@ -142,7 +142,7 @@ function singleCollectLimitTooltip(sourceName: IntelVisibleSourceName) {
   if (sourceName === "cisa-kev") {
     return t("CISA KEV 手动采集默认仅采集本地最新 dateAdded 水位之后的新增漏洞；本地无水位时按此数量采集最新窗口。填 0 表示全量采集历史目录。");
   }
-  return t("留空表示不限制数量，采集器会尽可能拉取当前来源可返回的记录。");
+  return t("正式补全来源必须完成整个快照或增量窗口后才能激活，因此固定为不限量采集。");
 }
 
 function freshnessColor(state?: string | null) {
@@ -479,6 +479,16 @@ export default function IntelCollectionPage() {
     : undefined;
 
   useEffect(() => {
+    if (selectedEnrichmentSource) {
+      form.setFieldValue("limit", null);
+      return;
+    }
+    if (selectedSource === "cisa-kev" && form.getFieldValue("limit") == null) {
+      form.setFieldValue("limit", defaultValues.limit);
+    }
+  }, [form, selectedEnrichmentSource, selectedSource]);
+
+  useEffect(() => {
     if (!selectedEnrichmentSource) {
       return;
     }
@@ -511,7 +521,7 @@ export default function IntelCollectionPage() {
       const sourceName = values.source_name ?? defaultValues.source_name;
       if (isIntelEnrichmentSourceName(sourceName)) {
         return collectIntelEnrichmentSource(sourceName, {
-          limit: values.limit && values.limit > 0 ? values.limit : null,
+          limit: null,
           async_mode: true,
           force_baseline: false
         });
@@ -930,6 +940,7 @@ export default function IntelCollectionPage() {
                   min={selectedSource === "cisa-kev" ? 0 : 1}
                   max={5000}
                   placeholder={isIntelEnrichmentSourceName(selectedSource) ? t("不限制") : undefined}
+                  disabled={isIntelEnrichmentSourceName(selectedSource)}
                   style={{ width: "100%" }}
                 />
               </Form.Item>

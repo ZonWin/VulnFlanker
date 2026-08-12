@@ -347,6 +347,14 @@ async def collect_intel_enrichment_source(
 ) -> IntelCollectionResult:
     if source_name not in enrichment_source_names():
         raise HTTPException(status_code=404, detail="Enrichment source not found")
+    if payload.limit is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Enrichment collection must run without a record limit so the "
+                "snapshot or incremental window can be activated atomically"
+            ),
+        )
     if payload.force_baseline and source_name not in {"cve-list-v5", "redhat-csaf"}:
         raise HTTPException(status_code=400, detail="Source does not support forced baseline")
     if payload.async_mode:
