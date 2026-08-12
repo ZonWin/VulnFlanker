@@ -87,6 +87,7 @@ Copy-Item .env.example .env
 - `VULNFLANKER_FRONTEND_BIND` 为前端访问接口设置，建议保持默认。
 - 为保证密钥安全，在保存 AI 服务提供商 API 密钥前，需设置 `VULNFLANKER_AI_KEY_ENCRYPTION_KEY`。
 - 可于 `VULNFLANKER_BOOTSTRAP_ADMIN_PASSWORD` 直接设定管理员账号密码，留空则会在初次启动时开启首次启动的密码设定页面。
+- 如果宿主机通过本地代理访问 GitHub、NVD 等情报站点，请在 `.env` 中设置标准的 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`。Docker Desktop 中不能使用宿主机的 `127.0.0.1`，应使用类似 `http://host.docker.internal:7890` 的地址；`NO_PROXY` 应保留模板中的 Compose 内部服务名。
 
 启动演示环境：
 
@@ -106,6 +107,12 @@ http://127.0.0.1:8100/
 - Agent 接入服务健康检查：`http://127.0.0.1:8001/agent/v1/health/live`
 
 `deploy/docker-compose.yml` 中的 Compose 文件专门针对演示和开发用途进行了优化。它使用源代码绑定挂载，并为后端进程启用了重新加载。
+
+修改代理变量后需要重新创建后端容器使其生效：
+
+```powershell
+docker compose --env-file .env -f .\deploy\docker-compose.yml up -d --force-recreate console-api agent-ingress worker beat
+```
 
 ## Agent
 

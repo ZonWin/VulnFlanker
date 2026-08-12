@@ -1,5 +1,15 @@
 name: VulnFlanker
 
+x-outbound-proxy-environment: &outbound-proxy-environment
+  HTTP_PROXY: "${HTTP_PROXY:-}"
+  HTTPS_PROXY: "${HTTPS_PROXY:-}"
+  ALL_PROXY: "${ALL_PROXY:-}"
+  NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis,console-api,agent-ingress}"
+  http_proxy: "${HTTP_PROXY:-}"
+  https_proxy: "${HTTPS_PROXY:-}"
+  all_proxy: "${ALL_PROXY:-}"
+  no_proxy: "${NO_PROXY:-localhost,127.0.0.1,::1,postgres,redis,console-api,agent-ingress}"
+
 # Demo/development compose file.
 #
 # This stack is intentionally optimized for local evaluation: backend services
@@ -64,6 +74,7 @@ services:
     env_file:
       - ../.env
     environment:
+      <<: *outbound-proxy-environment
       PYTHONPATH: /workspace/backend
       VULNFLANKER_DATABASE_URL: postgresql+psycopg://vulnflanker:vulnflanker@postgres:5432/vulnflanker
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
@@ -101,6 +112,7 @@ services:
     env_file:
       - ../.env
     environment:
+      <<: *outbound-proxy-environment
       PYTHONPATH: /workspace/backend
       VULNFLANKER_DATABASE_URL: postgresql+psycopg://vulnflanker:vulnflanker@postgres:5432/vulnflanker
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
@@ -153,6 +165,7 @@ services:
     env_file:
       - ../.env
     environment:
+      <<: *outbound-proxy-environment
       PYTHONPATH: /workspace/backend
       VULNFLANKER_DATABASE_URL: postgresql+psycopg://vulnflanker:vulnflanker@postgres:5432/vulnflanker
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
@@ -250,6 +263,7 @@ services:
     env_file:
       - ../.env
     environment:
+      <<: *outbound-proxy-environment
       PYTHONPATH: /workspace/backend
       VULNFLANKER_DATABASE_URL: postgresql+psycopg://vulnflanker:vulnflanker@postgres:5432/vulnflanker
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"
@@ -283,6 +297,7 @@ services:
     env_file:
       - ../.env
     environment:
+      <<: *outbound-proxy-environment
       PYTHONPATH: /workspace/backend
       VULNFLANKER_DATABASE_URL: postgresql+psycopg://vulnflanker:vulnflanker@postgres:5432/vulnflanker
       VULNFLANKER_REDIS_URL: "redis://:${VULNFLANKER_REDIS_PASSWORD:?Set VULNFLANKER_REDIS_PASSWORD in .env}@redis:6379/0"

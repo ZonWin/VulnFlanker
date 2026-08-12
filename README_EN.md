@@ -128,6 +128,11 @@ Edit `.env` before starting:
 - You can set the administrator password directly with
   `VULNFLANKER_BOOTSTRAP_ADMIN_PASSWORD`. Leave it empty to enable the
   first-run password setup page on initial startup.
+- If the host reaches GitHub, NVD, or other intelligence sites through a local
+  proxy, set the standard `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` variables
+  in `.env`. Docker Desktop containers cannot use the host's `127.0.0.1`; use an
+  address such as `http://host.docker.internal:7890` and retain the Compose
+  service names from the template in `NO_PROXY`.
 
 Start the demo stack:
 
@@ -148,6 +153,11 @@ Useful local service URLs:
 
 The compose file in `deploy/docker-compose.yml` is intentionally optimized for
 demo and development use. It uses source bind mounts and reload-enabled backend
+processes. Recreate the backend containers after changing proxy variables:
+
+```powershell
+docker compose --env-file .env -f .\deploy\docker-compose.yml up -d --force-recreate console-api agent-ingress worker beat
+```
 processes.
 
 ## Agent
